@@ -1,0 +1,18 @@
+{
+  "name": "legilimens",
+  "version": "1.0.0",
+  "description": "WebTransport traffic inspector and security testing tool",
+  "type": "module",
+  "scripts": {
+    "gen-cert": "node scripts/generate-cert.js",
+    "install-all": "npm install && npm install --prefix server && npm install --prefix client",
+    "start-proxy": "node server/proxy.js",
+    "start-server": "node server/vulnerable-server.js",
+    "start-ui": "npm run dev --prefix client",
+    "start": "node scripts/start-all.js"
+  },
+  "dependencies": {
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
+    "selfsigned": "^2.4.1"
+  }
+}
