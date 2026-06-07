@@ -42,7 +42,7 @@ body,
 
 .app-shell {
   display: grid;
-  grid-template-rows: 60px 1fr 36px;
+  grid-template-rows: 60px auto 1fr 36px;
   height: 100vh;
   overflow: hidden;
 }
@@ -215,6 +215,58 @@ body,
   background: var(--danger);
   color: #fff;
 }
+
+/* ── Target Config Bar ───────────────────────────────────── */
+
+.target-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.target-bar__label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.target-bar__input {
+  padding: 5px 8px;
+  font-size: 11px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-dim);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.target-bar__input:focus {
+  border-color: var(--accent);
+}
+
+.target-bar__input::placeholder {
+  color: var(--text-secondary);
+}
+
+.target-bar__status {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.target-bar__status.saved { color: var(--accent); }
+.target-bar__status.error { color: var(--danger); }
+.target-bar__status.saving { color: var(--warning); }
 
 /* ── Traffic Log ─────────────────────────────────────────── */
 

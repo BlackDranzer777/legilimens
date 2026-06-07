@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import Header from './components/Header'
+import TargetConfig from './components/TargetConfig'
 import TrafficLog from './components/TrafficLog'
 import LatencyGraph from './components/LatencyGraph'
 import AttackSimulator from './components/AttackSimulator'
@@ -24,6 +25,7 @@ export default function App() {
         </div>
       )}
       <Header />
+      <TargetConfig />
       <main className="main-grid">
         <TrafficLog />
         <LatencyGraph />

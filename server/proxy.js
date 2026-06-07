@@ -20,10 +20,13 @@ if (!fs.existsSync(path.join(certsDir, 'cert.pem'))) {
 const certPem = fs.readFileSync(path.join(certsDir, 'cert.pem'), 'utf8')
 const keyPem = fs.readFileSync(path.join(certsDir, 'key.pem'), 'utf8')
 
-// Compute SPKI hash for serverCertificateHashes and the HTTP /cert-hash endpoint
+// WebTransport serverCertificateHashes uses SHA-256 over the ENTIRE DER-encoded
+// certificate. This is NOT the SPKI hash (SHA-256 of SubjectPublicKeyInfo) — the
+// SPKI hash is only for Chrome's --ignore-certificate-errors-spki-list launch flag.
+// Using the SPKI hash here makes the QUIC handshake fail cert verification for every
+// connection (browser client and the proxy→target hop alike).
 const x509 = new X509Certificate(certPem)
-const spkiDer = x509.publicKey.export({ type: 'spki', format: 'der' })
-const certHashBuf = createHash('sha256').update(spkiDer).digest() // Node Buffer
+const certHashBuf = createHash('sha256').update(x509.raw).digest() // Node Buffer, full-cert DER hash
 const certHashBase64 = certHashBuf.toString('base64')
 
 // --- HTTP API server (CORS-enabled, serves cert hash to browser) ---
@@ -45,6 +48,44 @@ app.post('/tamper', (req, res) => {
   tamperEnabled = req.body?.enabled ?? false
   res.json({ tamperEnabled })
   logInfo('Tamper mode changed', { tamperEnabled })
+})
+
+// --- Upstream target config (editable from the UI) ---
+// Defaults to the bundled vulnerable server, which shares our self-signed cert,
+// so its DER hash is the same value we serve at /cert-hash. Point it anywhere:
+//  - certHash set   -> pin that SHA-256(DER cert) hash (self-signed targets)
+//  - certHash empty -> normal CA verification (publicly-trusted targets)
+let targetConfig = { host: '127.0.0.1', port: 4434, certHash: certHashBase64 }
+
+app.get('/target', (_req, res) => {
+  res.json(targetConfig)
+})
+
+app.post('/target', (req, res) => {
+  const { host, port, certHash } = req.body ?? {}
+  if (!host || typeof host !== 'string' || !host.trim()) {
+    return res.status(400).json({ error: 'host is required' })
+  }
+  const p = Number(port)
+  if (!Number.isInteger(p) || p < 1 || p > 65535) {
+    return res.status(400).json({ error: 'port must be an integer 1–65535' })
+  }
+  let hash = ''
+  if (typeof certHash === 'string' && certHash.trim()) {
+    hash = certHash.trim()
+    let buf
+    try {
+      buf = Buffer.from(hash, 'base64')
+    } catch {
+      return res.status(400).json({ error: 'cert hash is not valid base64' })
+    }
+    if (buf.length !== 32) {
+      return res.status(400).json({ error: 'cert hash must be a base64 SHA-256 (32 bytes)' })
+    }
+  }
+  targetConfig = { host: host.trim(), port: p, certHash: hash }
+  logInfo('Upstream target changed', { host: targetConfig.host, port: targetConfig.port, pinned: !!hash })
+  res.json(targetConfig)
 })
 
 app.listen(4436, () => {
@@ -126,24 +167,28 @@ async function connectAndProxy(clientSession, sessionId, urlPath) {
   let serverSession
 
   try {
-    serverSession = new NodeWebTransport(`https://localhost:4434${urlPath}`, {
-      serverCertificateHashes: [
-        {
-          algorithm: 'sha-256',
-          // Pass the Buffer directly — Buffer extends Uint8Array (valid BufferSource)
-          value: certHashBuf,
-        },
-      ],
-    })
+    // Target is configurable from the UI (POST /target). Use 127.0.0.1 rather than
+    // localhost by default so this never depends on IPv6/IPv4 resolution order.
+    const target = targetConfig
+    const targetUrl = `https://${target.host}:${target.port}${urlPath}`
+    const options = {}
+    if (target.certHash) {
+      // Pin the target's self-signed cert. Buffer extends Uint8Array (valid BufferSource).
+      options.serverCertificateHashes = [
+        { algorithm: 'sha-256', value: Buffer.from(target.certHash, 'base64') },
+      ]
+    }
+    // No certHash -> rely on normal CA verification (publicly-trusted target).
+    serverSession = new NodeWebTransport(targetUrl, options)
     await serverSession.ready
-    logInfo('Connected to vulnerable server', { sessionId })
+    logInfo('Connected to upstream target', { sessionId, target: `${target.host}:${target.port}` })
   } catch (err) {
-    logError('Failed to connect to vulnerable server', err)
+    logError('Failed to connect to upstream target', err)
     broadcast({
       id: uuid(),
       type: 'connection',
       direction: 'outgoing',
-      payload: `Failed to reach vulnerable server: ${err.message}`,
+      payload: `Failed to reach upstream target ${targetConfig.host}:${targetConfig.port}: ${err.message}`,
       rawSize: 0,
       timestamp: Date.now(),
       latency: 0,

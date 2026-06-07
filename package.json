@@ -8,6 +8,7 @@
     "install-all": "npm install && npm install --prefix server && npm install --prefix client",
     "start-proxy": "node server/proxy.js",
     "start-server": "node server/vulnerable-server.js",
+    "start-echo": "node server/echo-server.js",
     "start-ui": "npm run dev --prefix client",
     "start": "node scripts/start-all.js"
   },

@@ -268,7 +268,12 @@ export const useStore = create<LegilimensStore>((set, get) => ({
     const hashBytes = base64ToUint8Array(certHash)
 
     try {
-      wt = new WebTransport('https://localhost:4433/', {
+      // Use 127.0.0.1, NOT localhost: Chromium resolves "localhost" to IPv6 ::1 first,
+      // but the proxy's QUIC socket only listens on IPv4 — so a localhost WebTransport
+      // URL fails with ERR_CONNECTION_REFUSED. (TCP endpoints like the WS log and the
+      // cert-hash fetch work over localhost because TCP falls back to IPv4; QUIC/UDP
+      // does not.) Connecting to the IPv4 literal avoids the resolution entirely.
+      wt = new WebTransport('https://127.0.0.1:4433/', {
         serverCertificateHashes: [{ algorithm: 'sha-256', value: hashBytes }],
       })
       await wt.ready
