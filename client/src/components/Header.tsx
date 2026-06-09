@@ -6,6 +6,7 @@ export default function Header() {
   const isActive = useStore((s) => s.isProxyActive)
   const start = useStore((s) => s.startWebTransport)
   const stop = useStore((s) => s.stopWebTransport)
+  const disconnect = useStore((s) => s.disconnectProxy)
   const clear = useStore((s) => s.clearLog)
 
   const statusLabel =
@@ -51,8 +52,12 @@ export default function Header() {
           ▶ START
         </button>
 
-        <button className="btn btn-danger" onClick={stop} disabled={!isActive}>
-          ■ STOP
+        <button className="btn btn-danger" onClick={stop} disabled={!isActive && status !== 'connecting'}>
+          ❚❚ PAUSE
+        </button>
+
+        <button className="btn btn-danger" onClick={disconnect} title="Hard-cut all sessions — the target must redial">
+          ✕ DISCONNECT
         </button>
 
         <button className="btn" onClick={clear} style={{ borderColor: 'var(--border-dim)' }}>

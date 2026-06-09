@@ -83,17 +83,54 @@ function EventRow({ event }: { event: TrafficEvent }) {
   )
 }
 
+type FilterKey = 'all' | 'normal' | 'suspicious' | 'tampered' | 'connection'
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: 'ALL' },
+  { key: 'suspicious', label: 'SUS' },
+  { key: 'tampered', label: 'TAMPERED' },
+  { key: 'normal', label: 'NORMAL' },
+  { key: 'connection', label: 'CONN' },
+]
+
+function pillStyle(active: boolean): React.CSSProperties {
+  return {
+    fontSize: 10,
+    letterSpacing: '0.06em',
+    padding: '3px 9px',
+    border: `1px solid ${active ? 'var(--accent)' : 'var(--border-dim)'}`,
+    background: active ? 'var(--accent)' : 'transparent',
+    color: active ? '#090909' : 'var(--text-secondary)',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    fontWeight: active ? 700 : 400,
+  }
+}
+
+function matchesFlag(e: TrafficEvent, filter: FilterKey) {
+  if (filter === 'all') return true
+  if (filter === 'connection') return e.type === 'connection'
+  return e.flag === filter
+}
+
 export default function TrafficLog() {
   const events = useStore((s) => s.events)
   const bottomRef = useRef<HTMLTableRowElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
+  const [flagFilter, setFlagFilter] = useState<FilterKey>('all')
+  const [search, setSearch] = useState('')
+
+  const q = search.trim().toLowerCase()
+  const filtered = events.filter(
+    (e) => matchesFlag(e, flagFilter) && (q === '' || e.payload.toLowerCase().includes(q))
+  )
 
   useEffect(() => {
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ block: 'nearest' })
     }
-  }, [events.length, autoScroll])
+  }, [filtered.length, autoScroll])
 
   const handleScroll = () => {
     if (!bodyRef.current) return
@@ -103,7 +140,47 @@ export default function TrafficLog() {
 
   return (
     <div className="panel">
-      <div className="panel-header">/ TRAFFIC LOG — {events.length} events</div>
+      <div className="panel-header">
+        / TRAFFIC LOG — {filtered.length}
+        {filtered.length !== events.length && <span style={{ color: 'var(--text-secondary)' }}> / {events.length}</span>} events
+      </div>
+
+      {/* Filter bar: flag pills + payload search. Filtering also cuts render load. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 12px',
+          borderBottom: '1px solid var(--border-dim)',
+          background: 'var(--bg-secondary)',
+          flexShrink: 0,
+        }}
+      >
+        {FILTERS.map((f) => (
+          <button key={f.key} style={pillStyle(flagFilter === f.key)} onClick={() => setFlagFilter(f.key)}>
+            {f.label}
+          </button>
+        ))}
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="search payload (e.g. token, score)…"
+          spellCheck={false}
+          style={{
+            marginLeft: 'auto',
+            width: 220,
+            padding: '4px 8px',
+            fontSize: 10,
+            background: 'var(--bg-primary)',
+            border: '1px solid var(--border-dim)',
+            color: 'var(--text-primary)',
+            outline: 'none',
+            fontFamily: 'inherit',
+          }}
+        />
+      </div>
+
       <div className="panel-body" ref={bodyRef} onScroll={handleScroll}>
         <table className="traffic-table">
           <thead>
@@ -118,7 +195,7 @@ export default function TrafficLog() {
             </tr>
           </thead>
           <tbody>
-            {events.map((e) => (
+            {filtered.map((e) => (
               <EventRow key={e.id} event={e} />
             ))}
             <tr ref={bottomRef} />
@@ -135,6 +212,19 @@ export default function TrafficLog() {
             }}
           >
             NO TRAFFIC INTERCEPTED — START THE PROXY TO BEGIN
+          </div>
+        )}
+        {events.length > 0 && filtered.length === 0 && (
+          <div
+            style={{
+              padding: '32px 16px',
+              color: 'var(--text-secondary)',
+              fontSize: 11,
+              textAlign: 'center',
+              letterSpacing: '0.08em',
+            }}
+          >
+            NO EVENTS MATCH THIS FILTER
           </div>
         )}
       </div>

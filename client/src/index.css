@@ -42,7 +42,9 @@ body,
 
 .app-shell {
   display: grid;
-  grid-template-rows: 60px auto 1fr 36px;
+  /* Header, UPSTREAM TARGET bar, TAMPER RULE bar, main grid (fills), status bar.
+     Each non-main row is `auto` so adding more bars never steals the main 1fr. */
+  grid-template-rows: 60px auto auto 1fr 36px;
   height: 100vh;
   overflow: hidden;
 }

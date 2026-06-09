@@ -57,6 +57,7 @@ interface LegilimensStore {
   disconnectWebSocket: () => void
   startWebTransport: () => Promise<void>
   stopWebTransport: () => void
+  disconnectProxy: () => void
   floodAttack: () => Promise<void>
   payloadInjection: () => Promise<void>
   unauthorizedStream: () => Promise<void>
@@ -234,29 +235,26 @@ export const useStore = create<LegilimensStore>((set, get) => ({
     set({ wsConnected: false })
   },
 
+  // START = tell the proxy to begin capturing (reliable HTTP toggle), then best-effort
+  // open our own WebTransport session so the Attack Simulator can inject traffic.
+  // Capture works even if that attack channel fails — so START never hangs.
   startWebTransport: async () => {
-    if (!('WebTransport' in window)) {
-      set({ connectionStatus: 'error' })
-      alert(
-        'WebTransport is not supported.\nPlease use Chrome/Edge launched with:\n--ignore-certificate-errors-spki-list=<hash>'
-      )
-      return
-    }
-
     set({ connectionStatus: 'connecting' })
 
-    let certHash: string
+    // 1) Reliable: tell the proxy to start relaying + logging.
     try {
-      const res = await fetch('http://localhost:4436/cert-hash')
-      const data = await res.json()
-      certHash = data.hash
+      await fetch('http://localhost:4436/intercept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      })
     } catch {
       set({ connectionStatus: 'error' })
       get().addEvent({
         id: crypto.randomUUID(),
         type: 'connection',
         direction: 'outgoing',
-        payload: 'Failed to fetch cert hash from proxy. Is the proxy running?',
+        payload: 'Failed to reach proxy API on :4436. Is the proxy running?',
         rawSize: 0,
         timestamp: Date.now(),
         latency: 0,
@@ -265,56 +263,84 @@ export const useStore = create<LegilimensStore>((set, get) => ({
       return
     }
 
-    const hashBytes = base64ToUint8Array(certHash)
+    // Capture is now live regardless of the attack channel below.
+    set({ isProxyActive: true, connectionStatus: 'active' })
 
+    // 2) Best-effort: open our own WebTransport session for the Attack Simulator.
+    //    Time-boxed so a flaky handshake can never freeze the UI in "connecting".
+    if (!('WebTransport' in window)) return
     try {
+      const res = await fetch('http://localhost:4436/cert-hash')
+      const { hash } = await res.json()
+      const hashBytes = base64ToUint8Array(hash)
+
       // Use 127.0.0.1, NOT localhost: Chromium resolves "localhost" to IPv6 ::1 first,
-      // but the proxy's QUIC socket only listens on IPv4 — so a localhost WebTransport
-      // URL fails with ERR_CONNECTION_REFUSED. (TCP endpoints like the WS log and the
-      // cert-hash fetch work over localhost because TCP falls back to IPv4; QUIC/UDP
-      // does not.) Connecting to the IPv4 literal avoids the resolution entirely.
-      wt = new WebTransport('https://127.0.0.1:4433/', {
-        serverCertificateHashes: [{ algorithm: 'sha-256', value: hashBytes }],
+      // but the proxy's QUIC socket only listens on IPv4.
+      const candidate = new WebTransport('https://127.0.0.1:4433/', {
+        serverCertificateHashes: [{ algorithm: 'sha-256', value: hashBytes as BufferSource }],
       })
-      await wt.ready
+      await Promise.race([
+        candidate.ready,
+        new Promise((_, rej) => setTimeout(() => rej(new Error('attack-channel timeout')), 8000)),
+      ])
 
-      set({ isProxyActive: true, connectionStatus: 'active' })
-
+      wt = candidate
       datagramWriter = wt.datagrams.writable.getWriter()
 
-      // Send ping datagrams every 500ms
       pingInterval = setInterval(async () => {
         if (!datagramWriter) return
         try {
-          const msg = JSON.stringify({ action: 'ping', time: Date.now() })
-          await datagramWriter.write(new TextEncoder().encode(msg))
+          await datagramWriter.write(
+            new TextEncoder().encode(JSON.stringify({ action: 'ping', time: Date.now() }))
+          )
         } catch {
           if (pingInterval) clearInterval(pingInterval)
         }
       }, 500)
 
-      // Read incoming datagrams (proxy echoes them back — already logged server-side)
       readIncomingDatagrams()
 
       wt.closed.catch(() => {}).finally(() => {
-        get().stopWebTransport()
+        if (pingInterval) { clearInterval(pingInterval); pingInterval = null }
+        try { datagramWriter?.releaseLock() } catch {}
+        datagramWriter = null
+        wt = null
       })
-    } catch (err) {
-      set({ connectionStatus: 'error', isProxyActive: false })
-      get().addEvent({
-        id: crypto.randomUUID(),
-        type: 'connection',
-        direction: 'outgoing',
-        payload: `WebTransport connection failed: ${err instanceof Error ? err.message : String(err)}`,
-        rawSize: 0,
-        timestamp: Date.now(),
-        latency: 0,
-        flag: 'suspicious',
-      })
+    } catch {
+      // Attack channel unavailable — capture still works; the attack buttons just
+      // won't be able to inject. Not a fatal error.
+      try { wt?.close() } catch {}
+      wt = null
     }
   },
 
+  // STOP = PAUSE: hold the wire. The proxy stops relaying + logging, but the target
+  // stays connected, so resuming (START) continues instantly with no reconnect.
   stopWebTransport: () => {
+    fetch('http://localhost:4436/intercept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'pause' }),
+    }).catch(() => {})
+
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null }
+    try { datagramWriter?.releaseLock() } catch {}
+    datagramWriter = null
+    try { wt?.close() } catch {}
+    wt = null
+    set({ isProxyActive: false, connectionStatus: 'idle' })
+  },
+
+  // DISCONNECT = hard cut (Option A): sever every live session at the proxy. The target
+  // loses its connection entirely and must redial on its own. Use before switching to a
+  // different app via the UPSTREAM TARGET bar.
+  disconnectProxy: () => {
+    fetch('http://localhost:4436/intercept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'disconnect' }),
+    }).catch(() => {})
+
     if (pingInterval) { clearInterval(pingInterval); pingInterval = null }
     try { datagramWriter?.releaseLock() } catch {}
     datagramWriter = null

@@ -8,6 +8,16 @@ import { createHash, X509Certificate } from 'crypto'
 import { v4 as uuid } from 'uuid'
 import { broadcast, logInfo, logError } from './logger.js'
 
+// Safety net: a proxy juggles many short-lived streams that close out of order, so a
+// stray rejected promise (e.g. closing an already-closed stream) must NOT take down the
+// whole process. Log it and keep serving instead of crashing.
+process.on('unhandledRejection', (reason) => {
+  logError('Unhandled promise rejection (ignored)', reason instanceof Error ? reason : new Error(String(reason)))
+})
+process.on('uncaughtException', (err) => {
+  logError('Uncaught exception (ignored)', err)
+})
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const certsDir = path.join(__dirname, 'certs')
 
@@ -42,12 +52,65 @@ app.get('/cert-hash', (_req, res) => {
   res.json({ hash: certHashBase64 })
 })
 
-let tamperEnabled = false
+// Tamper rule: rewrite a named JSON field's value on every datagram / stream chunk
+// that passes through, in BOTH directions. e.g. { field:'score', value:'99999' } forces
+// score to 99999 — the headline "trust-the-client" demo. The field can appear anywhere
+// in the JSON (top-level or nested), and the value may be a string, number, or boolean.
+// matchField/matchValue (optional) scope the rewrite to ONE object — e.g.
+// matchField:'playerName', matchValue:'Seeker' changes score only for Seeker, even when
+// a single message carries every player's score. Empty match = rewrite everywhere.
+let tamperRule = { enabled: false, field: 'score', value: '99999', matchField: '', matchValue: '' }
+
+app.get('/tamper', (_req, res) => res.json(tamperRule))
 
 app.post('/tamper', (req, res) => {
-  tamperEnabled = req.body?.enabled ?? false
-  res.json({ tamperEnabled })
-  logInfo('Tamper mode changed', { tamperEnabled })
+  const { enabled, field, value, matchField, matchValue } = req.body ?? {}
+  tamperRule = {
+    enabled: !!enabled,
+    field: typeof field === 'string' ? field.trim() : tamperRule.field,
+    value: value == null ? tamperRule.value : String(value),
+    matchField: typeof matchField === 'string' ? matchField.trim() : '',
+    matchValue: matchValue == null ? '' : String(matchValue),
+  }
+  logInfo('Tamper rule changed', tamperRule)
+  res.json(tamperRule)
+})
+
+// --- Interception control (START / PAUSE / DISCONNECT from the UI) ---
+// captureMode:
+//   'capturing' -> forward + log all traffic.
+//   'paused'    -> HOLD the wire: the client stays connected, but no traffic passes
+//                  and nothing is logged. Resuming continues instantly (no reconnect).
+// Default to 'paused' so the proxy captures NOTHING until the operator presses START.
+// This is why traffic no longer flows on its own — Legilimens is in control now.
+let captureMode = 'paused'
+
+// Every live proxied session, so DISCONNECT can hard-cut them.
+const activeSessions = new Set()
+
+app.get('/intercept', (_req, res) => {
+  res.json({ captureMode, activeSessions: activeSessions.size })
+})
+
+app.post('/intercept', (req, res) => {
+  const action = req.body?.action
+  if (action === 'start' || action === 'resume') {
+    captureMode = 'capturing'
+  } else if (action === 'pause') {
+    captureMode = 'paused'
+  } else if (action === 'disconnect') {
+    // Hard cut (Option A): sever every live session. The client must redial to return.
+    for (const s of activeSessions) {
+      try { s.client.close() } catch {}
+      try { s.server.close() } catch {}
+    }
+    activeSessions.clear()
+    captureMode = 'paused'
+  } else {
+    return res.status(400).json({ error: "action must be 'start', 'pause', or 'disconnect'" })
+  }
+  logInfo('Intercept changed', { action, captureMode, active: activeSessions.size })
+  res.json({ captureMode, activeSessions: activeSessions.size })
 })
 
 // --- Upstream target config (editable from the UI) ---
@@ -93,13 +156,63 @@ app.listen(4436, () => {
 })
 
 // --- Payload helpers ---
-function tamperPayload(payload) {
-  if (!tamperEnabled) return { tampered: false, payload }
-  if (payload.includes('"token"')) {
-    const modified = payload.replace(/"token"\s*:\s*"[^"]*"/g, '"token":"TAMPERED_BY_LEGILIMENS"')
-    return { tampered: true, payload: modified }
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Turn the user's string value into the right JSON type (number / boolean / string).
+function coerceValue(v) {
+  if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v)
+  if (v === 'true') return true
+  if (v === 'false') return false
+  return v
+}
+
+// Recursively set `field` to `coerced` inside a parsed JSON value. When matchField is
+// set, only objects where obj[matchField] === matchValue are touched (target one player).
+function applyTamper(node, rule, coerced) {
+  let changed = false
+  if (Array.isArray(node)) {
+    for (const item of node) if (applyTamper(item, rule, coerced)) changed = true
+  } else if (node && typeof node === 'object') {
+    const conditionMet =
+      !rule.matchField || String(node[rule.matchField]) === String(rule.matchValue)
+    if (conditionMet && Object.prototype.hasOwnProperty.call(node, rule.field)) {
+      node[rule.field] = coerced
+      changed = true
+    }
+    for (const key of Object.keys(node)) {
+      if (node[key] && typeof node[key] === 'object') {
+        if (applyTamper(node[key], rule, coerced)) changed = true
+      }
+    }
   }
-  return { tampered: false, payload }
+  return changed
+}
+
+function tamperPayload(payload) {
+  const rule = tamperRule
+  if (!rule.enabled || !rule.field) return { tampered: false, payload }
+
+  // Preferred path: parse the JSON so we can target a single object (one player).
+  try {
+    const data = JSON.parse(payload)
+    const changed = applyTamper(data, rule, coerceValue(rule.value))
+    if (!changed) return { tampered: false, payload }
+    return { tampered: true, payload: JSON.stringify(data) }
+  } catch {
+    // Not JSON — fall back to a global regex replace. Per-object targeting needs JSON,
+    // so if a match condition is set we leave non-JSON payloads untouched.
+    if (rule.matchField) return { tampered: false, payload }
+    const re = new RegExp(
+      `("${escapeRegExp(rule.field)}"\\s*:\\s*)("(?:[^"\\\\]|\\\\.)*"|-?\\d+(?:\\.\\d+)?|true|false|null)`,
+      'g'
+    )
+    const isNumeric = /^-?\d+(\.\d+)?$/.test(rule.value)
+    const replacement = isNumeric ? `$1${rule.value}` : `$1"${rule.value}"`
+    const modified = payload.replace(re, replacement)
+    return { tampered: modified !== payload, payload: modified }
+  }
 }
 
 function isSuspicious(payload) {
@@ -198,12 +311,16 @@ async function connectAndProxy(clientSession, sessionId, urlPath) {
     return
   }
 
+  // Track this session so DISCONNECT can hard-cut it.
+  const sessionEntry = { client: clientSession, server: serverSession }
+  activeSessions.add(sessionEntry)
+
   proxyDatagrams(clientSession.datagrams.readable, serverSession.datagrams.writable, 'incoming', sessionId)
   proxyDatagrams(serverSession.datagrams.readable, clientSession.datagrams.writable, 'outgoing', sessionId)
   proxyStreams(clientSession.incomingBidirectionalStreams, serverSession, sessionId)
 
-  clientSession.closed.catch(() => {}).finally(() => { try { serverSession.close() } catch {} })
-  serverSession.closed.catch(() => {}).finally(() => { try { clientSession.close() } catch {} })
+  clientSession.closed.catch(() => {}).finally(() => { activeSessions.delete(sessionEntry); try { serverSession.close() } catch {} })
+  serverSession.closed.catch(() => {}).finally(() => { activeSessions.delete(sessionEntry); try { clientSession.close() } catch {} })
 }
 
 async function proxyDatagrams(readable, writable, direction, sessionId) {
@@ -214,6 +331,11 @@ async function proxyDatagrams(readable, writable, direction, sessionId) {
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
+
+      // PAUSED: hold the wire — drop this datagram (don't forward, don't log).
+      // The session stays alive; resuming continues instantly. Datagrams are lossy
+      // by design, so dropping while paused is safe.
+      if (captureMode !== 'capturing') continue
 
       const sendTime = Date.now()
       const raw = new TextDecoder().decode(value)
@@ -290,6 +412,9 @@ async function proxyStreamChunks(readable, writable, direction, streamId) {
       const { done, value } = await reader.read()
       if (done) break
 
+      // PAUSED: hold the wire — drop this stream chunk (don't forward, don't log).
+      if (captureMode !== 'capturing') continue
+
       const sendTime = Date.now()
       const raw = new TextDecoder().decode(value)
       const { tampered, payload } = tamperPayload(raw)
@@ -314,6 +439,8 @@ async function proxyStreamChunks(readable, writable, direction, streamId) {
     // Stream closed
   } finally {
     try { reader.releaseLock() } catch {}
-    try { writer.close() } catch {}
+    // writer.close() fails ASYNCHRONOUSLY (rejected promise) if the stream is already
+    // closed — a sync try/catch can't catch that, so attach a .catch() to swallow it.
+    try { writer.close().catch(() => {}) } catch {}
   }
 }
