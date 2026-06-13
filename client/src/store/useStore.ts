@@ -34,6 +34,19 @@ export interface LatencyPoint {
   stream: number
 }
 
+export type AttackStatus = 'started' | 'running' | 'complete' | 'failed' | 'stopped'
+
+export interface AttackState {
+  attackId: string
+  attackType: string
+  status: AttackStatus
+  progress?: { current: number; total: number; message: string }
+  result?: Record<string, unknown>
+  error?: string
+  startedAt: number
+  completedAt?: number
+}
+
 interface LegilimensStore {
   isProxyActive: boolean
   connectionStatus: 'idle' | 'connecting' | 'active' | 'error'
@@ -47,6 +60,8 @@ interface LegilimensStore {
   tamperedCount: number
   latencyHistory: LatencyPoint[]
   harvestedTokens: string[]
+  runningAttacks: Record<string, AttackState>
+  completedAttacks: AttackState[]
 
   addEvent: (event: TrafficEvent) => void
   setProxyActive: (active: boolean) => void
@@ -61,6 +76,9 @@ interface LegilimensStore {
   floodAttack: () => Promise<void>
   payloadInjection: () => Promise<void>
   unauthorizedStream: () => Promise<void>
+  launchAttack: (type: string, params: Record<string, unknown>, target?: string) => Promise<string | null>
+  stopAttack: (attackId: string) => Promise<void>
+  handleAttackEvent: (event: AttackState & { progress?: AttackState['progress'] }) => void
 }
 
 const MAX_EVENTS = 500
@@ -101,6 +119,8 @@ export const useStore = create<LegilimensStore>((set, get) => ({
   tamperedCount: 0,
   latencyHistory: [],
   harvestedTokens: [],
+  runningAttacks: {},
+  completedAttacks: [],
 
   addEvent: (raw) => {
     const event: TrafficEvent = {
@@ -213,8 +233,13 @@ export const useStore = create<LegilimensStore>((set, get) => ({
 
     ws.onmessage = (msg) => {
       try {
-        const event = JSON.parse(msg.data) as TrafficEvent
-        if (event.type && event.timestamp) get().addEvent(event)
+        const event = JSON.parse(msg.data)
+        // Attack progress/terminal events share this WS channel — route them separately.
+        if (event.type === 'attack') {
+          get().handleAttackEvent(event)
+          return
+        }
+        if (event.type && event.timestamp) get().addEvent(event as TrafficEvent)
       } catch {
         // ignore malformed messages
       }
@@ -380,6 +405,69 @@ export const useStore = create<LegilimensStore>((set, get) => ({
       new TextEncoder().encode(JSON.stringify({ action: 'unauthorized', auth: null }))
     )
     writer.releaseLock()
+  },
+
+  // Launch a server-side QUIC attack via POST /attack. Returns the attackId (or null).
+  // Progress + completion arrive asynchronously over the WebSocket as type:"attack".
+  launchAttack: async (type, params, target = 'https://127.0.0.1:4434') => {
+    try {
+      const res = await fetch('http://localhost:4436/attack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, target, params }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data?.attackId) return null
+      set((s) => ({
+        runningAttacks: {
+          ...s.runningAttacks,
+          [data.attackId]: {
+            attackId: data.attackId,
+            attackType: type,
+            status: 'started',
+            startedAt: Date.now(),
+          },
+        },
+      }))
+      return data.attackId as string
+    } catch {
+      return null
+    }
+  },
+
+  stopAttack: async (attackId) => {
+    try {
+      await fetch(`http://localhost:4436/attack/${attackId}/stop`, { method: 'POST' })
+    } catch {
+      // proxy unreachable — the WS will eventually reflect terminal state anyway
+    }
+  },
+
+  // Fold a WS attack event into runningAttacks; move terminal ones to completedAttacks.
+  handleAttackEvent: (event) => {
+    const { attackId, attackType, status, progress, result, error } = event
+    if (!attackId || !status) return
+    set((s) => {
+      const prev = s.runningAttacks[attackId]
+      const merged: AttackState = {
+        attackId,
+        attackType: attackType ?? prev?.attackType ?? 'unknown',
+        status,
+        startedAt: prev?.startedAt ?? Date.now(),
+        progress: progress ?? prev?.progress,
+        result: result ?? prev?.result,
+        error: error ?? prev?.error,
+      }
+      if (status === 'complete' || status === 'failed' || status === 'stopped') {
+        const { [attackId]: _omit, ...rest } = s.runningAttacks
+        merged.completedAt = Date.now()
+        return {
+          runningAttacks: rest,
+          completedAttacks: [merged, ...s.completedAttacks].slice(0, 20),
+        }
+      }
+      return { runningAttacks: { ...s.runningAttacks, [attackId]: merged } }
+    })
   },
 }))
 
