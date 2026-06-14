@@ -24,7 +24,15 @@ import argparse
 import asyncio
 import json
 import ssl
+import sys
 import uuid
+
+# Windows cp1252 console can't encode the → / ← arrows this script prints — force UTF-8.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 from aioquic.asyncio import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol

@@ -24,6 +24,15 @@ import stat
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1252; force UTF-8 so the colored banner / cert hash
+# (and any Unicode in logs) print without crashing.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import api as api_module
 from certs import certs_exist, get_cert_hash
 from logger import log_info, log_error, start_logger
@@ -51,12 +60,22 @@ def _stdin_is_pipe() -> bool:
 
 async def watch_stdin():
     """Exit when stdin is closed — Electron parent process sends this signal."""
+    # connect_read_pipe on stdin is unsupported on the Windows Proactor event loop and
+    # throws a noisy (but non-fatal) traceback when stdin is a pipe. Skip the watch on
+    # Windows — Ctrl-C still shuts down cleanly; the Electron stdin-close signal (Phase 2)
+    # will need a Windows-specific mechanism (e.g. a named pipe or a heartbeat).
+    if sys.platform == "win32":
+        return
     if not _stdin_is_pipe():
         return  # terminal / /dev/null — skip, nothing to watch
     loop = asyncio.get_running_loop()
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+    try:
+        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+    except (NotImplementedError, OSError) as e:
+        log_info("stdin watch unavailable on this platform", {"error": str(e)})
+        return
     try:
         while True:
             chunk = await reader.read(1024)

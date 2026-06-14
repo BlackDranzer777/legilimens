@@ -18,6 +18,15 @@ from pathlib import Path
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+
+# Windows consoles default to cp1252, which can't encode the Unicode glyphs (←, …) this
+# script prints — force UTF-8 so cert generation never dies on a cosmetic print line.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 CERTS_DIR = Path(__file__).parent / "certs"
