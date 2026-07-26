@@ -33,6 +33,7 @@ from aioquic.quic.events import ConnectionTerminated, QuicEvent, StreamDataRecei
 
 import api
 from logger import broadcast_async, log_error, log_info
+from udp_fix import harden_udp_server
 
 CERTS_DIR = Path(__file__).parent / "certs"
 
@@ -196,7 +197,6 @@ class UpstreamClientProtocol(QuicConnectionProtocol):
                 (b":path", path.encode()),
                 (b":protocol", b"webtransport"),
                 (b"origin", f"https://{authority}".encode()),
-                (b"sec-webtransport-http3-draft", b"draft02"),
             ],
         )
         self.transmit()
@@ -313,14 +313,37 @@ class ProxySession:
     async def client_datagram_received(self, data: bytes):
         if api.capture_mode != "capturing":
             return
+        # Wait for the upstream to be ready so a datagram the client fires the instant it
+        # connects isn't lost to the dial race (mirrors the stream path below).
+        if not self._upstream_ready.is_set():
+            try:
+                await asyncio.wait_for(self._upstream_ready.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                return
         t0 = int(time.time() * 1000)
         raw = data.decode(errors="replace")
         tampered, payload = tamper_payload(raw)
+        decision = await self._manual_decision(
+            direction="incoming",
+            message_type="datagram",
+            payload=payload,
+            raw_size=len(data),
+        )
+        if decision["action"] == "drop":
+            await self._log_intercept_drop(
+                direction="incoming",
+                message_type="datagram",
+                raw_size=len(data),
+                intercept_id=decision.get("interceptId"),
+            )
+            return
+        manually_changed = decision["payload"] != payload
+        payload = decision["payload"]
         out = payload.encode()
         if self.upstream:
             self.upstream.send_datagram(out)
         latency = int(time.time() * 1000) - t0
-        flag = "tampered" if tampered else ("suspicious" if is_suspicious(payload) else "normal")
+        flag = "tampered" if (tampered or manually_changed) else ("suspicious" if is_suspicious(payload) else "normal")
         await broadcast_async(make_event(
             direction="incoming", etype="datagram",
             payload=payload, raw_size=len(data), latency=latency, flag=flag,
@@ -332,6 +355,22 @@ class ProxySession:
         t0 = int(time.time() * 1000)
         raw = data.decode(errors="replace")
         tampered, payload = tamper_payload(raw)
+        decision = await self._manual_decision(
+            direction="outgoing",
+            message_type="datagram",
+            payload=payload,
+            raw_size=len(data),
+        )
+        if decision["action"] == "drop":
+            await self._log_intercept_drop(
+                direction="outgoing",
+                message_type="datagram",
+                raw_size=len(data),
+                intercept_id=decision.get("interceptId"),
+            )
+            return
+        manually_changed = decision["payload"] != payload
+        payload = decision["payload"]
         out = payload.encode()
         try:
             self.server_protocol.send_datagram(self.client_session_id, out)
@@ -339,7 +378,7 @@ class ProxySession:
         except Exception:
             pass
         latency = int(time.time() * 1000) - t0
-        flag = "tampered" if tampered else ("suspicious" if is_suspicious(payload) else "normal")
+        flag = "tampered" if (tampered or manually_changed) else ("suspicious" if is_suspicious(payload) else "normal")
         await broadcast_async(make_event(
             direction="outgoing", etype="datagram",
             payload=payload, raw_size=len(data), latency=latency, flag=flag,
@@ -353,6 +392,44 @@ class ProxySession:
         sid = str(uuid.uuid4())[:8]
         self._stream_sid[client_stream_id] = sid
         return sid, True
+
+    async def _manual_decision(
+        self,
+        *,
+        direction: str,
+        message_type: str,
+        payload: str,
+        raw_size: int,
+        stream_id: str | None = None,
+    ) -> dict:
+        return await api.await_manual_intercept(
+            session_id=self.session_uuid,
+            direction=direction,
+            message_type=message_type,
+            payload=payload,
+            raw_size=raw_size,
+            stream_id=stream_id,
+        )
+
+    async def _log_intercept_drop(
+        self,
+        *,
+        direction: str,
+        message_type: str,
+        raw_size: int,
+        intercept_id: str | None,
+        stream_id: str | None = None,
+    ) -> None:
+        await broadcast_async(make_event(
+            direction=direction,
+            etype=message_type,
+            payload=f"Intercept dropped {direction} {message_type}"
+                    + (f" ({intercept_id[:8]})" if intercept_id else ""),
+            raw_size=raw_size,
+            latency=0,
+            flag="normal",
+            stream_id=stream_id,
+        ))
 
     async def client_stream_data_received(self, client_stream_id: int, data: bytes, ended: bool):
         # client → upstream. Each client stream is paired with exactly ONE upstream
@@ -378,6 +455,26 @@ class ProxySession:
         tampered, payload = (False, "")
         if data:
             tampered, payload = tamper_payload(data.decode(errors="replace"))
+            decision = await self._manual_decision(
+                direction="incoming",
+                message_type="stream",
+                payload=payload,
+                raw_size=len(data),
+                stream_id=sid,
+            )
+            if decision["action"] == "drop":
+                await self._log_intercept_drop(
+                    direction="incoming",
+                    message_type="stream",
+                    raw_size=len(data),
+                    intercept_id=decision.get("interceptId"),
+                    stream_id=sid,
+                )
+                return
+            manually_changed = decision["payload"] != payload
+            payload = decision["payload"]
+        else:
+            manually_changed = False
 
         up_id = self._c2u.get(client_stream_id)
         if up_id is None and self.upstream and self.upstream.get_session_id() is not None:
@@ -398,7 +495,7 @@ class ProxySession:
 
         if data:
             latency = int(time.time() * 1000) - t0
-            flag = "tampered" if tampered else ("suspicious" if is_suspicious(payload) else "normal")
+            flag = "tampered" if (tampered or manually_changed) else ("suspicious" if is_suspicious(payload) else "normal")
             await broadcast_async(make_event(
                 direction="incoming", etype="stream",
                 payload=payload, raw_size=len(data), latency=latency, flag=flag, stream_id=sid,
@@ -430,6 +527,26 @@ class ProxySession:
         tampered, payload = (False, "")
         if data:
             tampered, payload = tamper_payload(data.decode(errors="replace"))
+            decision = await self._manual_decision(
+                direction="outgoing",
+                message_type="stream",
+                payload=payload,
+                raw_size=len(data),
+                stream_id=sid,
+            )
+            if decision["action"] == "drop":
+                await self._log_intercept_drop(
+                    direction="outgoing",
+                    message_type="stream",
+                    raw_size=len(data),
+                    intercept_id=decision.get("interceptId"),
+                    stream_id=sid,
+                )
+                return
+            manually_changed = decision["payload"] != payload
+            payload = decision["payload"]
+        else:
+            manually_changed = False
 
         try:
             self.server_protocol._quic.send_stream_data(client_stream_id, payload.encode(), end_stream=ended)
@@ -439,7 +556,7 @@ class ProxySession:
 
         if data:
             latency = int(time.time() * 1000) - t0
-            flag = "tampered" if tampered else ("suspicious" if is_suspicious(payload) else "normal")
+            flag = "tampered" if (tampered or manually_changed) else ("suspicious" if is_suspicious(payload) else "normal")
             await broadcast_async(make_event(
                 direction="outgoing", etype="stream",
                 payload=payload, raw_size=len(data), latency=latency, flag=flag, stream_id=sid,
@@ -498,11 +615,13 @@ class ProxyServerProtocol(QuicConnectionProtocol):
                 )
 
     def _accept_session(self, stream_id: int, path: str):
+        # WebTransport is negotiated via H3 SETTINGS (ENABLE_WEBTRANSPORT / H3_DATAGRAM /
+        # ENABLE_CONNECT_PROTOCOL), which aioquic emits automatically from
+        # enable_webtransport=True. A bare 200 is all a modern peer (Chrome, aioquic) needs.
         self._http.send_headers(
             stream_id=stream_id,
             headers=[
                 (b":status", b"200"),
-                (b"sec-webtransport-http3-draft", b"draft02"),
             ],
         )
         self.transmit()
@@ -555,6 +674,42 @@ class ProxyServerProtocol(QuicConnectionProtocol):
             pass
 
 
+async def replay_message(direction: str, message_type: str, payload: str) -> dict:
+    """Repeater: inject an (edited) message into the live proxied session.
+
+    direction "incoming" → send to the server as the client;
+    direction "outgoing" → send to the client as the server.
+    Reuses the existing session send paths; the target's echo/response flows back through
+    the normal logging path and appears in the traffic log on its own.
+    """
+    if message_type != "datagram":
+        return {"ok": False, "error": "only datagram replay is supported"}
+
+    session = next(iter(LIVE_SESSIONS), None)
+    if session is None:
+        return {"ok": False, "error": "no active session — press START and connect a client"}
+
+    data = payload.encode()
+    try:
+        if direction == "incoming":
+            if session.upstream is None:
+                return {"ok": False, "error": "upstream not connected yet"}
+            session.upstream.send_datagram(data)  # self-transmits
+        else:  # outgoing
+            session.server_protocol.send_datagram(session.client_session_id, data)
+            session.server_protocol.transmit()
+    except Exception as e:
+        log_error("Replay failed", e)
+        return {"ok": False, "error": str(e)}
+
+    # Surface the injected message in the UI (its own REPLAY flag).
+    await broadcast_async(make_event(
+        direction=direction, etype="datagram",
+        payload=payload, raw_size=len(data), latency=0, flag="replay",
+    ))
+    return {"ok": True}
+
+
 async def disconnect_all():
     """Hard-cut every live session (UI DISCONNECT). Severs both the upstream and the
     client QUIC connection; the client must redial to return."""
@@ -582,6 +737,7 @@ async def start_proxy(port: int = 4433):
     config.load_cert_chain(str(certs_dir / "cert.pem"), str(certs_dir / "key.pem"))
 
     api.register_disconnect_fn(disconnect_all)
+    api.register_replay_fn(replay_message)
 
     server = await serve(
         "0.0.0.0",
@@ -589,5 +745,7 @@ async def start_proxy(port: int = 4433):
         configuration=config,
         create_protocol=ProxyServerProtocol,
     )
-    log_info("MITM proxy started", {"port": port})
+    # Windows: keep the UDP listener alive when a browser reloads (see udp_fix).
+    hardened = harden_udp_server(server)
+    log_info("MITM proxy started", {"port": port, "udpConnresetFix": hardened})
     return server

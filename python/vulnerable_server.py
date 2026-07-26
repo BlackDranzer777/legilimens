@@ -26,6 +26,7 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
 
 from logger import log_info, log_error
+from udp_fix import harden_udp_server
 
 CERTS_DIR = Path(__file__).parent / "certs"
 
@@ -134,7 +135,6 @@ class VulnerableServerProtocol(QuicConnectionProtocol):
             stream_id=stream_id,
             headers=[
                 (b":status", b"200"),
-                (b"sec-webtransport-http3-draft", b"draft02"),
             ],
         )
         self.transmit()
@@ -175,5 +175,7 @@ async def start_vulnerable_server(port: int = 4434):
         configuration=config,
         create_protocol=VulnerableServerProtocol,
     )
+    # Windows: keep the UDP listener alive when a browser reloads (see udp_fix).
+    harden_udp_server(server)
     log_info("Vulnerable WebTransport server started", {"port": port})
     return server

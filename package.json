@@ -6,7 +6,8 @@
   "scripts": {
     "gen-cert": "python python/certs.py",
     "start": "python python/backend.py",
-    "start-ui": "vite --config client/vite.config.ts",
-    "install-py": "pip install -r python/requirements.txt"
+    "start-ui": "npm --prefix client run dev",
+    "install-py": "pip install -r python/requirements.txt",
+    "install-ui": "npm --prefix client install"
   }
 }
