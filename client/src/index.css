@@ -42,17 +42,18 @@ body,
 
 .app-shell {
   display: grid;
-  /* Header, UPSTREAM TARGET bar, TAMPER RULE bar, SERVER info bar, main grid (fills),
-     status bar. Each non-main row is `auto` so adding more bars never steals the main 1fr. */
-  grid-template-rows: 60px auto auto auto 1fr 36px;
+  /* Header, UPSTREAM TARGET bar, TAMPER RULE bar, SERVER info bar, INTERCEPT bar,
+     main grid (fills), status bar. Each non-main row is `auto` so adding more bars
+     never steals the main 1fr. */
+  grid-template-rows: 60px auto auto auto auto 1fr 36px;
   height: 100vh;
   overflow: hidden;
 }
 
 .main-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
+  grid-template-columns: 1.4fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
   overflow: hidden;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -67,13 +68,12 @@ body,
   background: var(--bg-primary);
 }
 
-.panel:nth-child(2n) {
-  border-right: none;
-}
-
-.panel:nth-child(n + 3) {
-  border-bottom: none;
-}
+/* 4-panel layout: Traffic Log fills the full-height left column; Repeater, Attack
+   Simulator and Stream Inspector stack in the right column. */
+.main-grid > .panel:nth-child(1) { grid-row: 1 / 4; }                          /* Traffic Log — full height */
+.main-grid > .panel:nth-child(2) { border-right: none; }                       /* Repeater — top right */
+.main-grid > .panel:nth-child(3) { border-right: none; }                       /* Attack Simulator — mid right */
+.main-grid > .panel:nth-child(4) { border-right: none; border-bottom: none; }  /* Stream Inspector — bottom right */
 
 .panel-header {
   padding: 6px 12px;
@@ -270,6 +270,47 @@ body,
 .target-bar__status.error { color: var(--danger); }
 .target-bar__status.saving { color: var(--warning); }
 
+/* ── Intercept Queue (held messages) ─────────────────────── */
+
+.intercept-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--warning);
+}
+
+.intercept-item {
+  background: var(--bg-card);
+  padding: 6px 16px;
+  border-left: 2px solid var(--warning);
+}
+
+.intercept-item__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.intercept-item__payload {
+  width: 100%;
+  resize: vertical;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-dim);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.intercept-item__payload:focus {
+  border-color: var(--accent);
+}
+
 /* ── Traffic Log ─────────────────────────────────────────── */
 
 .traffic-table {
@@ -374,6 +415,12 @@ body,
 .badge-connection {
   color: #6699ff;
   border-color: #6699ff;
+}
+
+.badge-replay {
+  color: #6699ff;
+  border-color: #6699ff;
+  background: rgba(102, 153, 255, 0.12);
 }
 
 /* ── Attack Simulator ────────────────────────────────────── */
