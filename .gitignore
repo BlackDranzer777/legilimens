@@ -18,3 +18,16 @@ build/
 .DS_Store
 *.log
 .env
+
+# Office temp / lock files (e.g. ~$REPORT.docx, created while a doc is open in Word)
+~$*
+
+# Personal interview-prep notes — never push
+interview.md
+
+# Generated documentation (doc/generate_doc.py regenerates these; the script IS committed)
+doc/*.docx
+doc/assets/
+
+# NOTE: the top-level assets/ folder (README images) IS committed on purpose — do not ignore it.
+# Regenerate those with assets/generate_assets.py.

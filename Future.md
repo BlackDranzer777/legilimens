@@ -13,16 +13,27 @@ gaps; **P2** = polish, scale, and reach.
 ## P0 — The core testing workflow (must-have)
 
 ### 1. Interactive intercept (hold → edit → forward / drop)
-**The single most important gap.** Right now tamper is a fire-and-forget *rule*. Burp's
-defining feature is the **manual intercept loop**: each message (or selected ones) is
-*paused*, shown to the tester, who edits it freely and then **Forwards** or **Drops** it.
+**Partially present.** The backend queue/API now exists and incoming datagrams were verified
+end-to-end, but the React Intercept panel is not built yet. Right now tamper is still a
+fire-and-forget *rule* in the UI. Burp's defining feature is the **manual intercept loop**:
+each message (or selected ones) is *paused*, shown to the tester, who edits it freely and
+then **Forwards** or **Drops** it.
+- **Status checklist:**
+  - [x] Backend manual-intercept config: `GET/POST /intercept/manual`.
+  - [x] Backend pending queue: `GET /intercept/queue`.
+  - [x] Backend decisions: `POST /intercept/{id}/decision` with `forward`/`drop` and optional edited payload.
+  - [x] WebSocket `type:"intercept"` events for `pending`, `forwarded`, `dropped`, and `timeout`.
+  - [x] Incoming datagram E2E verified: edited `playerId` to `p-edited`; vulnerable server echoed the edited value.
+  - [x] Drop E2E verified for incoming datagrams: 3 sent, 2 echoes received after one drop.
+  - [ ] React Intercept panel/queue/editor.
+  - [ ] Dedicated live stream-chunk E2E test.
 - **Why a pentester needs it:** real testing is exploratory — "what if I change *this one*
   field on *this one* message and see what breaks?" Rules can't express that.
-- **Approach:** add an `intercept_queue` in `proxy.py`; when intercept-mode is on, hold the
-  message and `await` a decision pushed from the UI over the API/WS. UI gets an "Intercept"
-  panel with the editable payload + Forward/Drop/Edit buttons. Needs a per-message id and a
+- **Remaining approach:** wire the UI to the existing backend queue/API. UI gets an
+  "Intercept" panel with the editable payload + Forward/Drop/Edit buttons, queue count,
+  timeout state, and filters for direction/type. Backend already has per-message ids and a
   timeout fallback (auto-forward) so a stuck queue can't freeze the target.
-- **Touches:** `proxy.py`, `api.py` (new `/intercept/decision`), WS protocol, a new UI panel.
+- **Touches:** `client/src/store/useStore.ts`, a new UI panel, and a small live stream test.
 
 ### 2. Repeater (craft & resend a message manually)
 Take any captured message, edit it, and **fire it again** as many times as you want —
