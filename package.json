@@ -5,6 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/start-all.js",
+    "vulns": "node scripts/start-vulns.js",
+    "vuln-1": "node scripts/start-vulns.js 01_no_auth",
+    "vuln-2": "node scripts/start-vulns.js 02_trust_client",
+    "vuln-3": "node scripts/start-vulns.js 03_secret_leak",
+    "vuln-4": "node scripts/start-vulns.js 04_stored_xss",
     "gen-cert": "python python/certs.py",
     "start": "python python/backend.py",
     "start-ui": "npm --prefix client run dev -- --port 5180",
