@@ -4,9 +4,10 @@
   "description": "WebTransport traffic inspector and security testing tool",
   "type": "module",
   "scripts": {
+    "dev": "node scripts/start-all.js",
     "gen-cert": "python python/certs.py",
     "start": "python python/backend.py",
-    "start-ui": "npm --prefix client run dev",
+    "start-ui": "npm --prefix client run dev -- --port 5180",
     "install-py": "pip install -r python/requirements.txt",
     "install-ui": "npm --prefix client install"
   }
