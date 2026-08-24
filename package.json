@@ -4,9 +4,17 @@
   "description": "WebTransport traffic inspector and security testing tool",
   "type": "module",
   "scripts": {
+    "dev": "node scripts/start-all.js",
+    "vulns": "node scripts/start-vulns.js",
+    "vuln-1": "node scripts/start-vulns.js 01_no_auth",
+    "vuln-2": "node scripts/start-vulns.js 02_trust_client",
+    "vuln-3": "node scripts/start-vulns.js 03_secret_leak",
+    "vuln-4": "node scripts/start-vulns.js 04_stored_xss",
+    "vuln-5": "node scripts/start-vulns.js 05_no_rate_limit",
     "gen-cert": "python python/certs.py",
     "start": "python python/backend.py",
-    "start-ui": "vite --config client/vite.config.ts",
-    "install-py": "pip install -r python/requirements.txt"
+    "start-ui": "npm --prefix client run dev -- --port 5180",
+    "install-py": "pip install -r python/requirements.txt",
+    "install-ui": "npm --prefix client install"
   }
 }

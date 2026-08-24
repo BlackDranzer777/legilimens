@@ -3,7 +3,10 @@ FastAPI control API on :4436.
 Preserves the exact HTTP contract that the React UI expects.
 """
 
+import asyncio
 import base64
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -36,12 +39,156 @@ target_config: dict = {"host": "127.0.0.1", "port": 4434, "certHash": ""}
 # proxy.py sets this once it reads the cert hash on startup
 _cert_hash_cache: str | None = None
 
+# Manual intercept is separate from capture_mode:
+#   capture_mode="paused" drops traffic at the proxy boundary.
+#   manual_intercept["enabled"]=True holds individual messages for a decision.
+manual_intercept: dict = {
+    "enabled": False,
+    "directions": ["incoming", "outgoing"],
+    "types": ["datagram", "stream"],
+    "timeoutMs": 30000,
+}
+
+# interceptId -> public item dict. Futures are stored separately so API responses never
+# try to serialize asyncio internals.
+pending_intercepts: dict[str, dict] = {}
+_pending_futures: dict[str, asyncio.Future] = {}
+
 
 def set_cert_hash(h: str) -> None:
     global _cert_hash_cache, target_config
     _cert_hash_cache = h
     if not target_config["certHash"]:
         target_config["certHash"] = h
+
+
+# ---------- manual intercept helpers (called by proxy.py) ----------
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _public_intercept(item: dict) -> dict:
+    return {k: v for k, v in item.items() if k != "future"}
+
+
+def _manual_config_response() -> dict:
+    return {
+        **manual_intercept,
+        "pending": len(pending_intercepts),
+    }
+
+
+def should_manual_intercept(direction: str, message_type: str) -> bool:
+    return (
+        bool(manual_intercept["enabled"])
+        and direction in manual_intercept["directions"]
+        and message_type in manual_intercept["types"]
+    )
+
+
+async def await_manual_intercept(
+    *,
+    session_id: str,
+    direction: str,
+    message_type: str,
+    payload: str,
+    raw_size: int,
+    stream_id: str | None = None,
+) -> dict:
+    """Hold one message until the UI/API decides to forward/drop it.
+
+    Returns {"action": "forward"|"drop", "payload": str, "status": str, "interceptId": str|None}.
+    """
+    if not should_manual_intercept(direction, message_type):
+        return {"action": "forward", "payload": payload, "status": "bypassed", "interceptId": None}
+
+    intercept_id = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    item = {
+        "id": intercept_id,
+        "timestamp": _now_ms(),
+        "sessionId": session_id,
+        "direction": direction,
+        "messageType": message_type,
+        "payload": payload,
+        "rawSize": raw_size,
+        "streamId": stream_id,
+    }
+    pending_intercepts[intercept_id] = item
+    _pending_futures[intercept_id] = fut
+
+    await broadcast_async({
+        "id": str(uuid.uuid4()),
+        "timestamp": _now_ms(),
+        "type": "intercept",
+        "status": "pending",
+        "interceptId": intercept_id,
+        "direction": direction,
+        "messageType": message_type,
+        "payload": payload,
+        "rawSize": raw_size,
+        "size": raw_size,
+        "latency": 0,
+        "flag": "normal",
+        **({"streamId": stream_id} if stream_id else {}),
+    })
+
+    timeout_s = max(1, int(manual_intercept["timeoutMs"])) / 1000
+    try:
+        decision = await asyncio.wait_for(fut, timeout=timeout_s)
+    except asyncio.TimeoutError:
+        decision = {"action": "forward", "payload": payload, "status": "timeout"}
+    finally:
+        pending_intercepts.pop(intercept_id, None)
+        _pending_futures.pop(intercept_id, None)
+
+    action = decision.get("action", "forward")
+    resolved_payload = str(decision.get("payload", payload))
+    status = decision.get("status") or ("dropped" if action == "drop" else "forwarded")
+    await broadcast_async({
+        "id": str(uuid.uuid4()),
+        "timestamp": _now_ms(),
+        "type": "intercept",
+        "status": status,
+        "interceptId": intercept_id,
+        "direction": direction,
+        "messageType": message_type,
+        "payload": resolved_payload,
+        "rawSize": raw_size,
+        "size": raw_size,
+        "latency": 0,
+        "flag": "tampered" if resolved_payload != payload else "normal",
+        **({"streamId": stream_id} if stream_id else {}),
+    })
+    return {
+        "action": action,
+        "payload": resolved_payload,
+        "status": status,
+        "interceptId": intercept_id,
+    }
+
+
+def _resolve_pending(intercept_id: str, action: str, payload: str | None = None) -> bool:
+    fut = _pending_futures.get(intercept_id)
+    item = pending_intercepts.get(intercept_id)
+    if fut is None or item is None or fut.done():
+        return False
+    fut.set_result({
+        "action": action,
+        "payload": item["payload"] if payload is None else payload,
+        "status": "dropped" if action == "drop" else "forwarded",
+    })
+    return True
+
+
+def _forward_all_pending() -> int:
+    count = 0
+    for intercept_id in list(pending_intercepts.keys()):
+        if _resolve_pending(intercept_id, "forward"):
+            count += 1
+    return count
 
 
 # ---------- disconnect callback (set by proxy.py) ----------
@@ -52,6 +199,16 @@ _disconnect_all_fn = None
 def register_disconnect_fn(fn) -> None:
     global _disconnect_all_fn
     _disconnect_all_fn = fn
+
+
+# ---------- replay callback (set by proxy.py) ----------
+
+_replay_fn = None
+
+
+def register_replay_fn(fn) -> None:
+    global _replay_fn
+    _replay_fn = fn
 
 
 # ---------- app ----------
@@ -149,6 +306,78 @@ async def post_intercept(body: InterceptBody):
     return {"captureMode": capture_mode, "activeSessions": len(active_sessions)}
 
 
+# ---------- /intercept/manual ----------
+
+@app.get("/intercept/manual")
+async def get_manual_intercept():
+    return _manual_config_response()
+
+
+class ManualInterceptBody(BaseModel):
+    enabled: bool | None = None
+    directions: list[str] | None = None
+    types: list[str] | None = None
+    timeoutMs: int | None = None
+
+
+@app.post("/intercept/manual")
+async def post_manual_intercept(body: ManualInterceptBody):
+    valid_directions = {"incoming", "outgoing"}
+    valid_types = {"datagram", "stream"}
+
+    if body.directions is not None:
+        directions = [d for d in body.directions if d in valid_directions]
+        if not directions:
+            raise HTTPException(status_code=400, detail="directions must include incoming and/or outgoing")
+        manual_intercept["directions"] = directions
+
+    if body.types is not None:
+        types = [t for t in body.types if t in valid_types]
+        if not types:
+            raise HTTPException(status_code=400, detail="types must include datagram and/or stream")
+        manual_intercept["types"] = types
+
+    if body.timeoutMs is not None:
+        if not (1000 <= body.timeoutMs <= 300000):
+            raise HTTPException(status_code=400, detail="timeoutMs must be between 1000 and 300000")
+        manual_intercept["timeoutMs"] = int(body.timeoutMs)
+
+    forwarded = 0
+    if body.enabled is not None:
+        manual_intercept["enabled"] = bool(body.enabled)
+        if not manual_intercept["enabled"]:
+            # Avoid leaving protocol coroutines frozen if the user disables intercept.
+            forwarded = _forward_all_pending()
+
+    log_info("Manual intercept changed", {**manual_intercept, "autoForwarded": forwarded})
+    return {**_manual_config_response(), "autoForwarded": forwarded}
+
+
+@app.get("/intercept/queue")
+async def get_intercept_queue():
+    return {
+        "items": sorted(
+            (_public_intercept(item) for item in pending_intercepts.values()),
+            key=lambda item: item["timestamp"],
+        )
+    }
+
+
+class InterceptDecisionBody(BaseModel):
+    action: str
+    payload: str | None = None
+
+
+@app.post("/intercept/{intercept_id}/decision")
+async def post_intercept_decision(intercept_id: str, body: InterceptDecisionBody):
+    action = body.action.strip().lower()
+    if action not in ("forward", "drop"):
+        raise HTTPException(status_code=400, detail="action must be 'forward' or 'drop'")
+    if not _resolve_pending(intercept_id, action, body.payload):
+        raise HTTPException(status_code=404, detail="unknown or already resolved interceptId")
+    return {"interceptId": intercept_id, "status": "accepted", "action": action}
+
+
 # ---------- /target ----------
 
 @app.get("/target")
@@ -185,6 +414,29 @@ async def post_target(body: TargetBody):
     target_config = {"host": body.host.strip(), "port": body.port, "certHash": cert_hash_val}
     log_info("Upstream target changed", {"host": target_config["host"], "port": target_config["port"], "pinned": bool(cert_hash_val)})
     return target_config
+
+
+# ---------- /replay (Repeater: resend an edited message) ----------
+
+class ReplayBody(BaseModel):
+    payload: str
+    direction: str
+    messageType: str
+
+
+@app.post("/replay")
+async def post_replay(body: ReplayBody):
+    if body.direction not in ("incoming", "outgoing"):
+        raise HTTPException(status_code=400, detail="direction must be 'incoming' or 'outgoing'")
+    if body.messageType not in ("datagram", "stream"):
+        raise HTTPException(status_code=400, detail="messageType must be 'datagram' or 'stream'")
+    if _replay_fn is None:
+        raise HTTPException(status_code=503, detail="proxy not ready")
+
+    result = await _replay_fn(body.direction, body.messageType, body.payload)
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error", "replay failed"))
+    return result
 
 
 # ---------- /attack (lifecycle of the attacks/ modules) ----------

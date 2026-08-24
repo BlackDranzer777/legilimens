@@ -29,6 +29,7 @@ function formatPayload(p: string) {
 
 function FlagBadge({ flag, type }: { flag?: string; type: string }) {
   if (type === 'connection') return <span className="badge badge-connection">CONN</span>
+  if (flag === 'replay') return <span className="badge badge-replay">REPLAY</span>
   if (flag === 'suspicious') return <span className="badge badge-suspicious">SUSPICIOUS</span>
   if (flag === 'tampered') return <span className="badge badge-tampered">TAMPERED</span>
   return <span className="badge badge-normal">NORMAL</span>
@@ -36,6 +37,7 @@ function FlagBadge({ flag, type }: { flag?: string; type: string }) {
 
 function EventRow({ event }: { event: TrafficEvent }) {
   const [expanded, setExpanded] = useState(false)
+  const sendToRepeater = useStore((s) => s.sendToRepeater)
 
   let formatted = ''
   try {
@@ -64,9 +66,6 @@ function EventRow({ event }: { event: TrafficEvent }) {
             : event.type.toUpperCase()}
         </td>
         <td style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{formatSize(event.rawSize)}</td>
-        <td style={{ color: 'var(--text-secondary)', fontSize: 10 }}>
-          {event.latency > 0 ? event.latency + 'ms' : '—'}
-        </td>
         <td className="payload-cell">{formatPayload(event.payload)}</td>
         <td>
           <FlagBadge flag={event.flag} type={event.type} />
@@ -74,8 +73,20 @@ function EventRow({ event }: { event: TrafficEvent }) {
       </tr>
       {expanded && (
         <tr className="traffic-expand">
-          <td colSpan={7}>
+          <td colSpan={6}>
             <pre>{formatted}</pre>
+            {event.type !== 'connection' && (
+              <button
+                className="btn"
+                style={{ margin: '4px 16px 8px', borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  sendToRepeater(event)
+                }}
+              >
+                ⟳ SEND TO REPEATER
+              </button>
+            )}
           </td>
         </tr>
       )}
@@ -83,12 +94,13 @@ function EventRow({ event }: { event: TrafficEvent }) {
   )
 }
 
-type FilterKey = 'all' | 'normal' | 'suspicious' | 'tampered' | 'connection'
+type FilterKey = 'all' | 'normal' | 'suspicious' | 'tampered' | 'replay' | 'connection'
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'ALL' },
   { key: 'suspicious', label: 'SUS' },
   { key: 'tampered', label: 'TAMPERED' },
+  { key: 'replay', label: 'REPLAY' },
   { key: 'normal', label: 'NORMAL' },
   { key: 'connection', label: 'CONN' },
 ]
@@ -189,7 +201,6 @@ export default function TrafficLog() {
               <th>DIR</th>
               <th>TYPE</th>
               <th>SIZE</th>
-              <th>LAT</th>
               <th>PAYLOAD</th>
               <th>FLAG</th>
             </tr>

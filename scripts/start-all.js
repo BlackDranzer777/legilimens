@@ -1,56 +1,89 @@
-import { spawn } from 'child_process'
+// scripts/start-all.js — one-command Legilimens dev launcher.
+//
+// Regenerates the certificate, then starts the Python backend and the Vite frontend
+// together, streaming both logs into this one terminal. Ctrl+C stops everything.
+//
+//   npm run dev
+//
+// Uses the project's own venv (.venv) so the backend gets aioquic / cryptography / fastapi.
+
+import { spawn, spawnSync } from 'child_process'
 import path from 'path'
-import { fileURLToPath } from 'url'
 import fs from 'fs'
+import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const serverDir = path.join(__dirname, '../server')
-const certsDir = path.join(serverDir, 'certs')
+const root = path.resolve(__dirname, '..')
+const isWin = process.platform === 'win32'
+const venvPy = isWin
+  ? path.join(root, '.venv', 'Scripts', 'python.exe')
+  : path.join(root, '.venv', 'bin', 'python')
+const UI_PORT = '5180' // avoids the common 5173 clash with other Vite projects
 
-if (!fs.existsSync(path.join(certsDir, 'cert.pem'))) {
-  console.error('[legilimens] No certificate found. Run: npm run gen-cert')
+const C = {
+  reset: '\x1b[0m', cyan: '\x1b[36m', green: '\x1b[32m',
+  blue: '\x1b[34m', magenta: '\x1b[35m', red: '\x1b[31m', yellow: '\x1b[33m',
+}
+const tag = (name, color, line) => console.log(`${color}[${name}]${C.reset} ${line}`)
+
+// --- preflight: the venv is where the backend's Python deps live ---
+if (!fs.existsSync(venvPy)) {
+  tag('legilimens', C.red, `venv Python not found at ${venvPy}`)
+  tag('legilimens', C.red, 'create it first:  python -m venv .venv   then   npm run install-py')
   process.exit(1)
 }
 
-const colors = { proxy: '\x1b[32m', server: '\x1b[33m', reset: '\x1b[0m' }
+// --- 1) certificate (WebTransport certs expire in <=14 days, so regenerate every start) ---
+tag('legilimens', C.cyan, 'generating certificate...')
+const cert = spawnSync(venvPy, [path.join(root, 'python', 'certs.py')], {
+  cwd: root, stdio: ['ignore', 'ignore', 'inherit'],
+})
+if (cert.status !== 0) {
+  tag('legilimens', C.red, 'certificate generation failed (see error above)')
+  process.exit(1)
+}
+tag('legilimens', C.green, 'certificate ready.')
 
-function spawnProcess(name, color, cmd, args, cwd) {
-  const proc = spawn(cmd, args, { cwd, stdio: 'pipe' })
-
-  proc.stdout.on('data', (data) => {
-    data.toString().trim().split('\n').forEach(line => {
-      console.log(`${color}[${name}]${colors.reset} ${line}`)
+// --- 2) + 3) backend + frontend, each with a labelled log prefix ---
+const children = []
+function stream(name, color, proc) {
+  const pipe = (s) => {
+    let buf = ''
+    s.on('data', (d) => {
+      buf += d.toString()
+      let i
+      while ((i = buf.indexOf('\n')) >= 0) {
+        tag(name, color, buf.slice(0, i).replace(/\r$/, ''))
+        buf = buf.slice(i + 1)
+      }
     })
-  })
-
-  proc.stderr.on('data', (data) => {
-    data.toString().trim().split('\n').forEach(line => {
-      console.error(`${color}[${name}]${colors.reset} ${line}`)
-    })
-  })
-
-  proc.on('exit', (code) => {
-    console.log(`${color}[${name}]${colors.reset} exited with code ${code}`)
-  })
-
-  return proc
+  }
+  if (proc.stdout) pipe(proc.stdout)
+  if (proc.stderr) pipe(proc.stderr)
+  proc.on('exit', (code) => tag(name, color, `exited (code ${code})`))
+  children.push(proc)
 }
 
-console.log('\x1b[36m[legilimens]\x1b[0m Starting all servers...')
-console.log('\x1b[36m[legilimens]\x1b[0m Proxy:    https://localhost:4433  (WebTransport)')
-console.log('\x1b[36m[legilimens]\x1b[0m Target:   https://localhost:4434  (Vulnerable server)')
-console.log('\x1b[36m[legilimens]\x1b[0m WS Log:   ws://localhost:4435     (UI events)')
-console.log('\x1b[36m[legilimens]\x1b[0m HTTP API: http://localhost:4436   (Cert hash endpoint)')
+tag('legilimens', C.cyan, 'starting backend (proxy :4433, target :4434, ws :4435, api :4436)...')
+stream('backend', C.blue, spawn(venvPy, [path.join(root, 'python', 'backend.py')], { cwd: root }))
+
+tag('legilimens', C.cyan, `starting UI on http://localhost:${UI_PORT} ...`)
+stream('ui', C.magenta, spawn('npm', ['--prefix', 'client', 'run', 'dev', '--', '--port', UI_PORT], {
+  cwd: root, shell: isWin,
+}))
+
+console.log('')
+tag('legilimens', C.green, `open the dashboard at  http://localhost:${UI_PORT}   —   Ctrl+C stops everything`)
 console.log('')
 
-const proxy = spawnProcess('PROXY ', colors.proxy, 'node', ['proxy.js'], serverDir)
-// Small delay so proxy initializes first
-setTimeout(() => {
-  spawnProcess('TARGET', colors.server, 'node', ['vulnerable-server.js'], serverDir)
-}, 500)
-
-process.on('SIGINT', () => {
-  console.log('\n\x1b[36m[legilimens]\x1b[0m Shutting down...')
-  proxy.kill()
-  process.exit(0)
-})
+// --- clean shutdown: kill children on Ctrl+C ---
+let shuttingDown = false
+function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+  tag('legilimens', C.yellow, 'shutting down...')
+  for (const c of children) { try { c.kill() } catch { /* ignore */ } }
+  setTimeout(() => process.exit(0), 300)
+}
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)

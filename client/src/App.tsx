@@ -2,9 +2,10 @@ import { useEffect } from 'react'
 import Header from './components/Header'
 import TargetConfig from './components/TargetConfig'
 import TamperConfig from './components/TamperConfig'
+import InterceptPanel from './components/InterceptPanel'
 import ServerInfoBar from './components/ServerInfoBar'
 import TrafficLog from './components/TrafficLog'
-import LatencyGraph from './components/LatencyGraph'
+import Repeater from './components/Repeater'
 import AttackSimulator from './components/AttackSimulator'
 import StreamInspector from './components/StreamInspector'
 import StatusBar from './components/StatusBar'
@@ -30,9 +31,10 @@ export default function App() {
       <TargetConfig />
       <TamperConfig />
       <ServerInfoBar />
+      <InterceptPanel />
       <main className="main-grid">
         <TrafficLog />
-        <LatencyGraph />
+        <Repeater />
         <AttackSimulator />
         <StreamInspector />
       </main>

@@ -9,7 +9,13 @@ export interface TrafficEvent {
   timestamp: number
   latency: number
   streamId?: string
-  flag?: 'suspicious' | 'normal' | 'tampered'
+  flag?: 'suspicious' | 'normal' | 'tampered' | 'replay'
+}
+
+export interface RepeaterState {
+  payload: string
+  direction: 'incoming' | 'outgoing'
+  messageType: 'datagram' | 'stream'
 }
 
 export interface StreamChunk {
@@ -28,12 +34,6 @@ export interface StreamSession {
   chunks: StreamChunk[]
 }
 
-export interface LatencyPoint {
-  time: number
-  datagram: number
-  stream: number
-}
-
 export type AttackStatus = 'started' | 'running' | 'complete' | 'failed' | 'stopped'
 
 export interface AttackState {
@@ -47,6 +47,23 @@ export interface AttackState {
   completedAt?: number
 }
 
+export interface InterceptItem {
+  interceptId: string
+  timestamp: number
+  direction: 'incoming' | 'outgoing'
+  messageType: 'datagram' | 'stream'
+  payload: string
+  rawSize: number
+  streamId?: string
+}
+
+export interface ManualInterceptConfig {
+  enabled: boolean
+  directions: string[]
+  types: string[]
+  timeoutMs: number
+}
+
 interface LegilimensStore {
   isProxyActive: boolean
   connectionStatus: 'idle' | 'connecting' | 'active' | 'error'
@@ -55,13 +72,15 @@ interface LegilimensStore {
   streams: Record<string, StreamSession>
   totalEvents: number
   totalDatagrams: number
-  avgLatency: number
   suspiciousCount: number
   tamperedCount: number
-  latencyHistory: LatencyPoint[]
   harvestedTokens: string[]
   runningAttacks: Record<string, AttackState>
   completedAttacks: AttackState[]
+  manualIntercept: ManualInterceptConfig
+  pendingIntercepts: InterceptItem[]
+  repeater: RepeaterState
+  repeaterStatus: string
 
   addEvent: (event: TrafficEvent) => void
   setProxyActive: (active: boolean) => void
@@ -79,10 +98,17 @@ interface LegilimensStore {
   launchAttack: (type: string, params: Record<string, unknown>, target?: string) => Promise<string | null>
   stopAttack: (attackId: string) => Promise<void>
   handleAttackEvent: (event: AttackState & { progress?: AttackState['progress'] }) => void
+  handleInterceptEvent: (event: Record<string, unknown>) => void
+  fetchInterceptConfig: () => Promise<void>
+  setManualIntercept: (partial: Partial<ManualInterceptConfig>) => Promise<void>
+  fetchInterceptQueue: () => Promise<void>
+  resolveIntercept: (interceptId: string, action: 'forward' | 'drop', payload?: string) => Promise<void>
+  sendToRepeater: (event: TrafficEvent) => void
+  setRepeater: (partial: Partial<RepeaterState>) => void
+  replaySend: () => Promise<void>
 }
 
 const MAX_EVENTS = 500
-const MAX_LATENCY_HISTORY = 120
 
 let ws: WebSocket | null = null
 let wt: WebTransport | null = null
@@ -114,13 +140,20 @@ export const useStore = create<LegilimensStore>((set, get) => ({
   streams: {},
   totalEvents: 0,
   totalDatagrams: 0,
-  avgLatency: 0,
   suspiciousCount: 0,
   tamperedCount: 0,
-  latencyHistory: [],
   harvestedTokens: [],
   runningAttacks: {},
   completedAttacks: [],
+  manualIntercept: {
+    enabled: false,
+    directions: ['incoming', 'outgoing'],
+    types: ['datagram', 'stream'],
+    timeoutMs: 30000,
+  },
+  pendingIntercepts: [],
+  repeater: { payload: '', direction: 'incoming', messageType: 'datagram' },
+  repeaterStatus: '',
 
   addEvent: (raw) => {
     const event: TrafficEvent = {
@@ -161,28 +194,6 @@ export const useStore = create<LegilimensStore>((set, get) => ({
         }
       }
 
-      // Rolling latency history (one point per second)
-      const now = Date.now()
-      const history = [...state.latencyHistory]
-      const last = history[history.length - 1]
-      if (!last || now - last.time > 1000) {
-        history.push({
-          time: now,
-          datagram: event.type === 'datagram' ? event.latency : 0,
-          stream: event.type === 'stream' ? event.latency : 0,
-        })
-        if (history.length > MAX_LATENCY_HISTORY) history.shift()
-      } else {
-        if (event.type === 'datagram') last.datagram = event.latency
-        if (event.type === 'stream') last.stream = event.latency
-      }
-
-      // Compute rolling avg latency
-      const recent = events.slice(-50)
-      const avgLatency = recent.length
-        ? Math.round(recent.reduce((s, e) => s + e.latency, 0) / recent.length)
-        : 0
-
       // Extract tokens from heartbeats
       const newTokens = extractTokens(event.payload)
       const harvestedTokens = newTokens.length
@@ -192,12 +203,10 @@ export const useStore = create<LegilimensStore>((set, get) => ({
       return {
         events,
         streams,
-        latencyHistory: history,
         totalEvents: state.totalEvents + 1,
         totalDatagrams: event.type === 'datagram' ? state.totalDatagrams + 1 : state.totalDatagrams,
         suspiciousCount: event.flag === 'suspicious' ? state.suspiciousCount + 1 : state.suspiciousCount,
         tamperedCount: event.flag === 'tampered' ? state.tamperedCount + 1 : state.tamperedCount,
-        avgLatency,
         harvestedTokens,
       }
     })
@@ -212,10 +221,8 @@ export const useStore = create<LegilimensStore>((set, get) => ({
       streams: {},
       totalEvents: 0,
       totalDatagrams: 0,
-      avgLatency: 0,
       suspiciousCount: 0,
       tamperedCount: 0,
-      latencyHistory: [],
       harvestedTokens: [],
     }),
 
@@ -237,6 +244,12 @@ export const useStore = create<LegilimensStore>((set, get) => ({
         // Attack progress/terminal events share this WS channel — route them separately.
         if (event.type === 'attack') {
           get().handleAttackEvent(event)
+          return
+        }
+        // Manual-intercept events drive the Intercept panel, not the main traffic log.
+        // (The proxy emits a normal traffic event after forward/drop, so nothing is lost.)
+        if (event.type === 'intercept') {
+          get().handleInterceptEvent(event)
           return
         }
         if (event.type && event.timestamp) get().addEvent(event as TrafficEvent)
@@ -312,6 +325,9 @@ export const useStore = create<LegilimensStore>((set, get) => ({
       wt = candidate
       datagramWriter = wt.datagrams.writable.getWriter()
 
+      // Low-rate keepalive only — just enough to keep the session under the proxy's 30s
+      // idle timeout. (It was 500ms, which flooded the inspector's own log and the
+      // intercept queue with self-traffic.) The target's own messages keep it alive too.
       pingInterval = setInterval(async () => {
         if (!datagramWriter) return
         try {
@@ -321,7 +337,7 @@ export const useStore = create<LegilimensStore>((set, get) => ({
         } catch {
           if (pingInterval) clearInterval(pingInterval)
         }
-      }, 500)
+      }, 10000)
 
       readIncomingDatagrams()
 
@@ -468,6 +484,151 @@ export const useStore = create<LegilimensStore>((set, get) => ({
       }
       return { runningAttacks: { ...s.runningAttacks, [attackId]: merged } }
     })
+  },
+
+  // A held message arrives as type:"intercept" with status "pending"; the same interceptId
+  // later arrives as forwarded/dropped/timeout. Add on pending, remove on any terminal status.
+  handleInterceptEvent: (event) => {
+    const interceptId = event.interceptId as string | undefined
+    if (!interceptId) return
+    const status = event.status as string | undefined
+
+    if (status === 'pending') {
+      set((s) => {
+        if (s.pendingIntercepts.some((p) => p.interceptId === interceptId)) return s
+        const item: InterceptItem = {
+          interceptId,
+          timestamp: (event.timestamp as number) ?? Date.now(),
+          direction: (event.direction as InterceptItem['direction']) ?? 'incoming',
+          messageType: (event.messageType as InterceptItem['messageType']) ?? 'datagram',
+          payload: (event.payload as string) ?? '',
+          rawSize: (event.rawSize as number) ?? 0,
+          streamId: event.streamId as string | undefined,
+        }
+        return { pendingIntercepts: [...s.pendingIntercepts, item] }
+      })
+    } else {
+      set((s) => ({
+        pendingIntercepts: s.pendingIntercepts.filter((p) => p.interceptId !== interceptId),
+      }))
+    }
+  },
+
+  fetchInterceptConfig: async () => {
+    try {
+      const res = await fetch('http://localhost:4436/intercept/manual')
+      const cfg = await res.json()
+      set({
+        manualIntercept: {
+          enabled: !!cfg.enabled,
+          directions: Array.isArray(cfg.directions) ? cfg.directions : ['incoming', 'outgoing'],
+          types: Array.isArray(cfg.types) ? cfg.types : ['datagram', 'stream'],
+          timeoutMs: typeof cfg.timeoutMs === 'number' ? cfg.timeoutMs : 30000,
+        },
+      })
+    } catch {
+      // proxy not up yet — keep defaults
+    }
+  },
+
+  setManualIntercept: async (partial) => {
+    const next = { ...get().manualIntercept, ...partial }
+    try {
+      const res = await fetch('http://localhost:4436/intercept/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: next.enabled,
+          directions: next.directions,
+          types: next.types,
+          timeoutMs: next.timeoutMs,
+        }),
+      })
+      const cfg = await res.json()
+      set({
+        manualIntercept: {
+          enabled: !!cfg.enabled,
+          directions: Array.isArray(cfg.directions) ? cfg.directions : next.directions,
+          types: Array.isArray(cfg.types) ? cfg.types : next.types,
+          timeoutMs: typeof cfg.timeoutMs === 'number' ? cfg.timeoutMs : next.timeoutMs,
+        },
+      })
+      // Disabling intercept auto-forwards everything still held — clear the local queue.
+      if (!cfg.enabled) set({ pendingIntercepts: [] })
+    } catch {
+      // proxy unreachable — leave config as-is
+    }
+  },
+
+  fetchInterceptQueue: async () => {
+    try {
+      const res = await fetch('http://localhost:4436/intercept/queue')
+      const data = await res.json()
+      const items: InterceptItem[] = (data.items ?? []).map((it: Record<string, unknown>) => ({
+        interceptId: it.id as string,
+        timestamp: (it.timestamp as number) ?? Date.now(),
+        direction: (it.direction as InterceptItem['direction']) ?? 'incoming',
+        messageType: (it.messageType as InterceptItem['messageType']) ?? 'datagram',
+        payload: (it.payload as string) ?? '',
+        rawSize: (it.rawSize as number) ?? 0,
+        streamId: it.streamId as string | undefined,
+      }))
+      set({ pendingIntercepts: items })
+    } catch {
+      // proxy not up yet — keep whatever the WS has delivered
+    }
+  },
+
+  resolveIntercept: async (interceptId, action, payload) => {
+    // Optimistically drop it from the queue; the terminal WS event will also remove it.
+    set((s) => ({
+      pendingIntercepts: s.pendingIntercepts.filter((p) => p.interceptId !== interceptId),
+    }))
+    try {
+      await fetch(`http://localhost:4436/intercept/${interceptId}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action === 'forward' ? { action, payload } : { action }),
+      })
+    } catch {
+      // proxy unreachable — the held coroutine will auto-forward on timeout
+    }
+  },
+
+  // Seed the Repeater from a captured event so it can be edited and resent.
+  sendToRepeater: (event) => {
+    const messageType = event.type === 'stream' ? 'stream' : 'datagram'
+    set({
+      repeater: { payload: event.payload, direction: event.direction, messageType },
+      repeaterStatus: '',
+    })
+  },
+
+  setRepeater: (partial) =>
+    set((s) => ({ repeater: { ...s.repeater, ...partial }, repeaterStatus: '' })),
+
+  replaySend: async () => {
+    const { payload, direction, messageType } = get().repeater
+    if (!payload.trim()) {
+      set({ repeaterStatus: 'nothing to send' })
+      return
+    }
+    set({ repeaterStatus: 'sending…' })
+    try {
+      const res = await fetch('http://localhost:4436/replay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload, direction, messageType }),
+      })
+      if (res.ok) {
+        set({ repeaterStatus: 'sent — watch the log for the response' })
+      } else {
+        const err = await res.json().catch(() => ({}))
+        set({ repeaterStatus: err?.detail || `failed (${res.status})` })
+      }
+    } catch {
+      set({ repeaterStatus: 'failed — is the proxy running?' })
+    }
   },
 }))
 

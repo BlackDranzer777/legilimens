@@ -2,7 +2,7 @@
 
 > Handoff doc for an LLM/dev continuing this work (e.g. on Windows). Captures the
 > current state, what's verified, what's broken, and how to run/test. Last updated
-> after wiring the 5 attacks to the API + UI.
+> after adding the backend manual-intercept queue/API and verifying datagram edit/drop.
 
 ## What this is
 
@@ -52,6 +52,9 @@ cd client && npm install && npm run dev   # http://localhost:5173
 ## HTTP API contract (`:4436`)
 
 - `POST /intercept` `{action: "start"|"pause"|"disconnect"}` — capture control
+- `GET/POST /intercept/manual` `{enabled, directions, types, timeoutMs}` — manual intercept config
+- `GET /intercept/queue` — pending manually-held messages
+- `POST /intercept/{id}/decision` `{action:"forward"|"drop", payload?}` — resolve one held message
 - `GET/POST /tamper` `{enabled, field, value, matchField, matchValue}` — rewrite a JSON field in passing traffic
 - `GET/POST /target` `{host, port, certHash}` — upstream target
 - `GET /cert-hash` → `{hash}` (base64 SHA-256 of the DER cert — for `serverCertificateHashes`)
@@ -65,7 +68,10 @@ Traffic: `{id, timestamp, direction, type:"datagram"|"stream"|"connection", payl
 
 Attack: `{id, timestamp, type:"attack", attackId, attackType, status:"running"|"complete"|"failed", progress:{current,total,message}, result?, error?}`
 
-The UI store (`client/src/store/useStore.ts`) routes `type:"attack"` to `handleAttackEvent`, everything else to `addEvent`.
+Manual intercept: `{id, timestamp, type:"intercept", status:"pending"|"forwarded"|"dropped"|"timeout", interceptId, direction, messageType:"datagram"|"stream", payload, rawSize, size, latency, flag, streamId?}`
+
+The UI store (`client/src/store/useStore.ts`) routes `type:"attack"` to `handleAttackEvent`.
+It does not yet route `type:"intercept"` to a dedicated UI panel.
 
 ## Attacks (`python/attacks/`, wired via `python/attack_runner.py`)
 
@@ -85,6 +91,11 @@ them as background tasks and broadcasts progress. Triggered from the UI's Attack
 - Node→Python migration of all 4 services (exact API contract preserved).
 - **Datagram MITM** + tamper (force `score=99999`) + suspicious-keyword flagging.
 - **Bidirectional stream proxying** (after fixing two aioquic quirks — see below).
+- **Manual intercept backend** — `/intercept/manual`, `/intercept/queue`, and
+  `/intercept/{id}/decision` can hold, edit+forward, forward unchanged, drop, and
+  timeout-auto-forward messages. Verified end-to-end for incoming datagrams: edited
+  `playerId:"p-test01"` to `playerId:"p-edited"` and the vulnerable server echoed the
+  edited value; a 3-datagram run produced only 2 echoes after one drop decision.
 - **Session teardown** — `activeSessions` returns to 0 on disconnect; survives concurrent load.
 - **Cross-implementation proof** — the Python proxy MITM'd the old *Node* server and
   captured its hardcoded `SECRET_TOKEN_abc123` (real wire data, not fabricated).
@@ -105,8 +116,11 @@ them as background tasks and broadcasts progress. Triggered from the UI's Attack
    not real RTT. Graph/StatusBar show ~0.
 3. **Tamper is per-chunk** — JSON split across multiple stream chunks won't match.
 4. **Unidirectional WebTransport streams not proxied** — bidi only.
-5. **No persistence/export/replay; no interactive per-message intercept-and-edit.**
-6. **Dead code:** the old browser-side attacks in `useStore.ts`
+5. **Manual intercept UI is not built yet.** Backend queue/API exists and datagrams were
+   verified end-to-end, but React has no Intercept panel yet. Stream chunks are wired into
+   the same backend decision path but still need a dedicated live stream E2E test.
+6. **No persistence/export/replay.**
+7. **Dead code:** the old browser-side attacks in `useStore.ts`
    (`floodAttack`/`payloadInjection`/`unauthorizedStream`) are no longer called by
    `AttackSimulator.tsx` (replaced by the server-side `/attack` flow). Harmless; can be removed.
 
@@ -142,8 +156,8 @@ python/
   backend.py            entry point (all 4 services)
   certs.py              ECDSA P-256 cert gen → python/certs/ (gitignored)
   logger.py             WS broadcaster :4435
-  api.py                FastAPI :4436 (incl. /attack endpoints)
-  proxy.py              MITM proxy :4433
+  api.py                FastAPI :4436 (incl. /attack + manual intercept endpoints)
+  proxy.py              MITM proxy :4433 (+ backend manual-intercept hooks)
   vulnerable_server.py  target :4434
   attack_runner.py      attack lifecycle + WS progress
   test_client.py        CLI WebTransport test client
@@ -164,4 +178,13 @@ curl -s localhost:4436/intercept
 curl -s -X POST localhost:4436/attack -H "Content-Type: application/json" \
   -d '{"type":"flooding","params":{"connections":20}}'
 curl -s localhost:4436/attack/<attackId>/status
+
+# manual intercept backend smoke test:
+curl -s -X POST localhost:4436/intercept -H "Content-Type: application/json" \
+  -d '{"action":"start"}'
+curl -s -X POST localhost:4436/intercept/manual -H "Content-Type: application/json" \
+  -d '{"enabled":true,"directions":["incoming"],"types":["datagram"],"timeoutMs":120000}'
+python python/test_client.py --count 3
+curl -s localhost:4436/intercept/queue
+# then POST /intercept/<id>/decision with {"action":"forward","payload":"..."} or {"action":"drop"}
 ```

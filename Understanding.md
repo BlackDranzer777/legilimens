@@ -133,6 +133,10 @@ biggest source of early bugs.
 - **START / PAUSE / DISCONNECT** — START begins capturing+forwarding; PAUSE *holds the wire*
   (connection stays alive, traffic frozen, resume instantly); DISCONNECT hard-cuts the
   session (the app must reconnect itself — a proxy can't force a client to redial).
+- **MANUAL INTERCEPT (backend-ready)** — the Python API can hold individual datagrams or
+  stream chunks, wait for a `forward`/`drop` decision, optionally forward an edited payload,
+  and auto-forward after a timeout. Incoming datagrams have been verified end-to-end; the
+  React Intercept panel is still pending.
 - **UPSTREAM TARGET** — where the proxy forwards to. Change this (plus point a different app
   at the proxy) to inspect a different app.
 - **TAMPER RULE** — rewrite a named JSON field in passing traffic (e.g. `score → 99999`),
@@ -179,12 +183,14 @@ honest about this in its comments.
 
 ## 10. What it can and can't do (scope)
 
-**Can:** inspect, filter, tamper, replay-by-hand, and attack any WebTransport app you point at
-it and are authorized to test; surface leaked secrets; prove trust-the-client and no-auth bugs.
+**Can:** inspect, filter, tamper, manually hold/edit/drop traffic through the backend API,
+and attack any WebTransport app you point at it and are authorized to test; surface leaked
+secrets; prove trust-the-client and no-auth bugs.
 
 **Can't:** secretly intercept an app that isn't routed through it; force a disconnected client
 to reconnect; meaningfully fuzz yet (see §9); measure real latency on localhost; persist or
-export a session (closing the tab loses everything).
+export a session (closing the tab loses everything); provide a polished UI for manual
+intercept yet.
 
 ---
 
@@ -193,9 +199,13 @@ export a session (closing the tab loses everything).
 A **strong, working prototype in a genuinely empty niche.** The hard part — a correct
 WebTransport MITM over QUIC, including bidirectional streams and tricky aioquic edge cases —
 is done and verified (it even MITM'd a different-language server and pulled out its real
-secret). What's missing is the **pentester workflow layer**: interactive hold-and-edit
-interception, save/replay/export, a real rule library, and finishing the fake attacks. See
-`Future.md` for that roadmap.
+secret). The backend foundation for **interactive hold-and-edit interception** now exists:
+`/intercept/manual`, `/intercept/queue`, and `/intercept/{id}/decision` can hold,
+edit+forward, forward unchanged, drop, and timeout-auto-forward messages. Incoming datagrams
+were verified end-to-end by editing `playerId` to `p-edited` and seeing the vulnerable server
+echo it back. What's still missing is the UI workflow around that backend, plus
+save/replay/export, a real rule library, and finishing the fake attacks. See `Future.md` for
+that roadmap.
 
 It's also slightly **ahead of its market** — real WebTransport apps are still rare, so there
 aren't many real-world targets to point it at *yet*.
@@ -204,8 +214,9 @@ aren't many real-world targets to point it at *yet*.
 
 ## 12. Good things to brainstorm (prompts for Claude)
 
-- How would I design the **interactive intercept** loop (hold a message, edit it in the UI,
-  forward/drop) without freezing the target? What about timeouts and ordering?
+- How should the React **interactive intercept** panel sit on top of the now-working backend
+  queue/API? What queue controls, editing affordances, timeout states, and ordering rules
+  should it expose?
 - What's the right way to **persist and export** a capture session for a pentest report?
 - How do I make the **fuzz attack real** — what does proper QUIC Initial-packet crypto
   (HKDF secrets, header protection, AEAD, 1200B padding) involve?

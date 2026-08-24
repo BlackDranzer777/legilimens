@@ -1,0 +1,4 @@
+# Dependencies ONLY for generating the .docx documentation (doc/generate_doc.py).
+# Kept separate from python/requirements.txt so the main app stays untouched.
+python-docx>=1.1.0
+matplotlib>=3.8.0

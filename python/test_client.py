@@ -77,7 +77,6 @@ class TestClientProtocol(QuicConnectionProtocol):
                 (b":path", path.encode()),
                 (b":protocol", b"webtransport"),
                 (b"origin", f"https://{authority}".encode()),
-                (b"sec-webtransport-http3-draft", b"draft02"),
             ],
         )
         self.transmit()

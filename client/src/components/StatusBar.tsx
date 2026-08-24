@@ -18,7 +18,6 @@ export default function StatusBar() {
     totalEvents,
     totalDatagrams,
     streams,
-    avgLatency,
     tamperedCount,
     suspiciousCount,
   } = useStore((s) => s)
@@ -32,7 +31,6 @@ export default function StatusBar() {
       <Item label="EVENTS" value={totalEvents.toLocaleString()} />
       <Item label="DATAGRAMS" value={totalDatagrams.toLocaleString()} />
       <Item label="STREAMS" value={streamCount} />
-      <Item label="AVG LATENCY" value={avgLatency > 0 ? `${avgLatency}ms` : '—'} />
       <Item label="TAMPERED" value={tamperedCount} warn={tamperedCount > 0} />
       <Item label="SUSPICIOUS" value={suspiciousCount} danger={suspiciousCount > 0} />
     </div>

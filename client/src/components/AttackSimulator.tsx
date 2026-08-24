@@ -17,18 +17,6 @@ const ATTACKS: { type: string; title: string; desc: string; params: Record<strin
     params: { connections: 100, cycleDelay: 30, cycles: 3 },
   },
   {
-    type: 'fuzz',
-    title: '/ QUIC-FUZZ',
-    desc: 'Sends 1000 mutated QUIC packets over raw UDP. (Unprotected Initials — a compliant server discards them, so 0 responses is expected.)',
-    params: { packets: 1000, mutationStrategy: 'random' },
-  },
-  {
-    type: 'out_of_joint',
-    title: '/ QUIC-OUT-OF-JOINT',
-    desc: 'Injects forbidden/out-of-order frames (STREAM in Initial, CRYPTO overlap, post-handshake inject).',
-    params: { probes: 4 },
-  },
-  {
     type: 'encapsulation',
     title: '/ QUIC-ENCAPSULATION',
     desc: 'Scapy-crafted TCP-in-UDP / UDP-in-UDP / fragmented packets. Requires root — fails with a clear error otherwise.',
@@ -50,10 +38,6 @@ function summary(a: AttackState): string {
       return `${r.handshakesCompleted ?? '?'} handshakes, ${r.failed ?? '?'} failed, ${r.duration ?? '?'}s`
     case 'loris':
       return `${r.cyclesCompleted ?? '?'} cycles, ${r.totalConnections ?? '?'} connections`
-    case 'fuzz':
-      return `${r.packetsSent ?? '?'} packets sent, ${r.responsesObserved ?? 0} responses observed`
-    case 'out_of_joint':
-      return `${r.probesAttempted ?? '?'} probes, ${r.probesResponded ?? 0} responded`
     case 'encapsulation':
       return `${r.packetsSent ?? '?'} packets sent`
     default:
