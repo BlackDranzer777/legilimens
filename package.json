@@ -10,6 +10,7 @@
     "vuln-2": "node scripts/start-vulns.js 02_trust_client",
     "vuln-3": "node scripts/start-vulns.js 03_secret_leak",
     "vuln-4": "node scripts/start-vulns.js 04_stored_xss",
+    "vuln-5": "node scripts/start-vulns.js 05_no_rate_limit",
     "gen-cert": "python python/certs.py",
     "start": "python python/backend.py",
     "start-ui": "npm --prefix client run dev -- --port 5180",
