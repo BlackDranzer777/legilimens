@@ -50,7 +50,7 @@ The whole backend runs as **one Python asyncio process** (`python/backend.py`) h
 | `4434` | Deliberately vulnerable target server | WebTransport (QUIC/UDP) | `python/vulnerable_server.py` |
 | `4435` | Live event broadcaster → React UI | WebSocket | `python/logger.py` |
 | `4436` | Control API (capture / tamper / target / attack) | HTTP (FastAPI) | `python/api.py` |
-| `5173` | React inspector UI | HTTP (Vite dev server) | `client/` |
+| `5180` | React inspector UI | HTTP (Vite dev server) | `client/` |
 
 > The backend was **migrated from Node.js to Python** (`aioquic`). The original Node implementation is kept under `server/` for reference but is no longer used. The React UI is unchanged — same API contract.
 
@@ -62,6 +62,8 @@ The whole backend runs as **one Python asyncio process** (`python/backend.py`) h
 - **Capture controls** — `START` (capture), `PAUSE` (hold the wire, connection stays alive), `DISCONNECT` (hard cut).
 - **Conditional tamper** — rewrite a JSON field in passing traffic, optionally only when another field matches (e.g. *change `score` to `99999`, but only where `playerName = Seeker`*).
 - **Runtime target switching** — point the proxy at a different upstream WebTransport server without restarting.
+- **Manual intercept** — hold a datagram/stream mid-flight, then **edit, forward, or drop** it (Burp-style Intercept), scoped by direction/type with a timeout.
+- **Repeater** — resend or **inject** an (edited) message into the live session — to the server or back to the client.
 - **Suspicious-data flagging** — payloads containing `token` / `auth` / `bearer` / passwords are auto-flagged.
 - **Attack simulator** — connection floods, slow-loris cycles, and more, launched from the UI with live progress (see [Attacks](#the-vulnerable-target--attacks)).
 - **Cert helper** — the cert hash for `serverCertificateHashes` is served at `/cert-hash` and shown in the UI with a copy button.
@@ -88,55 +90,36 @@ pip install -r python/requirements.txt
 npm run install-ui              # = npm --prefix client install
 ```
 
-### 2. Generate the TLS certificate
-
-WebTransport requires TLS. Legilimens generates a self-signed **ECDSA P-256** cert (Chromium rejects RSA here) using the `cryptography` library — **no OpenSSL needed**:
+### 2. Run it (one command)
 
 ```bash
-npm run gen-cert        # = python python/certs.py
+npm run dev
 ```
 
-This writes `python/certs/` (gitignored) and prints two hashes plus the exact Chrome launch command.
+This **regenerates the TLS cert**, starts the **backend** (proxy `:4433`, target `:4434`, WS log `:4435`, API `:4436`), and starts the **UI** on **http://localhost:5180** — all in one terminal. `Ctrl+C` stops everything.
 
-> ⚠️ The cert is valid for **13 days** (WebTransport's `serverCertificateHashes` limit is 14). Re-run `gen-cert` before it expires.
+> The cert is a self-signed **ECDSA P-256** cert (Chromium rejects RSA here), generated with the `cryptography` library — **no OpenSSL needed**. It is valid for 13 days, and `npm run dev` re-mints it on every launch, so you never hit an expired cert.
 
-### 3. Launch Chrome with QUIC flags
+### 3. Open the UI
 
-Copy the command `gen-cert` printed — it looks like:
+Open **plain Chrome or Edge** at **http://localhost:5180** and click **▶ START** to open a WebTransport connection through the proxy.
 
-```bash
-chromium \
-  --origin-to-force-quic-on=127.0.0.1:4433,127.0.0.1:4434 \
-  --ignore-certificate-errors-spki-list=<SPKI_HASH_FROM_GEN_CERT> \
-  http://localhost:5173
-```
-
-```powershell
-# Windows (PowerShell)
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
-  --origin-to-force-quic-on=127.0.0.1:4433,127.0.0.1:4434 `
-  --ignore-certificate-errors-spki-list=<SPKI_HASH_FROM_GEN_CERT> `
-  http://localhost:5173
-```
-
-### 4. Start everything
-
-```bash
-# Terminal 1 — all four backend services (wait for "READY")
-npm start                       # = python python/backend.py
-
-# Terminal 2 — React UI
-npm run start-ui                # Vite dev server on http://localhost:5173
-```
-
-### 5. Open the UI
-
-In the Chrome window you launched in step 3, go to **http://localhost:5173** and click **▶ START** to open a WebTransport connection through the proxy.
+> **No launch flags needed.** Legilimens serves its cert hash at `/cert-hash`, and the UI connects with the WebTransport `serverCertificateHashes` API — so a normal browser trusts the self-signed cert without any `--origin-to-force-quic-on` / `--ignore-certificate-errors-spki-list` flags. (`npm run gen-cert` still prints those flags if you want the legacy path.)
 
 > **No browser?** `python/test_client.py` is a CLI WebTransport client for testing:
 > ```bash
-> python python/test_client.py --count 5
+> .venv\Scripts\python.exe python/test_client.py --count 5
 > ```
+
+<details>
+<summary><b>Prefer to run the pieces separately?</b></summary>
+
+```bash
+npm run gen-cert     # regenerate the cert only
+npm start            # backend only  (= python python/backend.py)
+npm run start-ui     # UI only, on http://localhost:5180
+```
+</details>
 
 ---
 
@@ -177,6 +160,33 @@ Tampered messages appear with an orange **`TAMPERED`** badge in the traffic log.
 
 ---
 
+## Vulnerable practice apps
+
+Beyond the bundled target, **`vuln_apps/`** is a suite of tiny, **deliberately-insecure** WebTransport apps — one isolated flaw each — for practising against Legilimens. Every app is a headless `server.py` + a CLI `client.py`, with a `README.md` and a Markdown + Word report explaining the bug, the exploit, and the fix.
+
+| App | Vulnerability | Port | Legilimens shows |
+|---|---|---|---|
+| `01_no_auth` | Missing authentication (CWE-306) | `4451` | **watches** — session granted with no credential |
+| `02_trust_client` | Trusting client input (CWE-602) | `4452` | **tampers** — forge a value in flight |
+| `03_secret_leak` | Sensitive data exposure (CWE-200) | `4453` | **auto-flags** — secrets in the payload |
+| `04_stored_xss` | No input validation / stored XSS (CWE-79) | `4454` | **injects** — plant a payload via the Repeater |
+| `05_no_rate_limit` | No rate limiting / brute-force (CWE-307) | `4455` | **floods** — watch a brute-force live |
+
+```bash
+npm run vulns        # start all of them together
+npm run vuln-3       # start just one (here: 03_secret_leak on :4453)
+```
+
+Then point Legilimens at that app's port (**Upstream Target → `127.0.0.1:445X` → Apply**) and run its client through the proxy:
+
+```bash
+.venv\Scripts\python.exe vuln_apps\03_secret_leak\client.py --port 4433
+```
+
+> These are **local practice targets only** — they use fake demo data and intentionally omit defences. Each app's `README.md` walks through exploiting and fixing it.
+
+---
+
 ## The vulnerable target & attacks
 
 `python/vulnerable_server.py` is a deliberately insecure WebTransport server used as a safe practice target. It has **no authentication**, **leaks a session token** in periodic heartbeat datagrams, **echoes any payload** without validation, and **applies no rate limiting**.
@@ -198,20 +208,26 @@ The attack simulator (`python/attacks/`, orchestrated by `python/attack_runner.p
 ```
 python/
   backend.py            entry point — runs all four services on one asyncio loop
-  proxy.py              MITM proxy :4433  (capture control, conditional tamper, intercept hooks)
+  proxy.py              MITM proxy :4433  (capture, conditional tamper, intercept, repeater)
   vulnerable_server.py  deliberately insecure target :4434
   logger.py             WebSocket event broadcaster :4435
   api.py                FastAPI control API :4436
   certs.py              ECDSA P-256 cert generation -> python/certs/ (gitignored)
+  udp_fix.py            Windows SIO_UDP_CONNRESET fix (keeps the UDP listener alive on reload)
   attack_runner.py      attack lifecycle + live progress over the WS
   attacks/              flooding · loris · fuzz · out_of_joint · encapsulation
   test_client.py        CLI WebTransport client for browser-free testing
 
 client/src/
   store/useStore.ts     Zustand store (state, actions, WS event routing)
-  components/            Header · TrafficLog · LatencyGraph · StreamInspector
+  components/            Header · TrafficLog · StreamInspector · Repeater · InterceptPanel
                         StatusBar · TargetConfig · TamperConfig · AttackSimulator · ServerInfoBar
 
+scripts/
+  start-all.js          `npm run dev`   — cert + backend + UI, one command
+  start-vulns.js        `npm run vulns` / `vuln-N` — the vuln_apps launchers
+
+vuln_apps/              deliberately-insecure practice apps (server + client + report each)
 assets/                 README images (committed) + generate_assets.py to rebuild them
 server/                 original Node.js backend — kept for reference, not used
 ```
@@ -222,24 +238,24 @@ server/                 original Node.js backend — kept for reference, not use
 
 Legilimens is a **strong working prototype**, not a shipped product. What's solid and what isn't:
 
-**Works end to end:** datagram + bidirectional-stream MITM, conditional tamper, suspicious-keyword flagging, capture start/pause/disconnect, session teardown under load, runtime target switching, and the `flooding` / `loris` attacks (real QUIC handshakes). The Python proxy has even MITM'd the old Node server and captured its hardcoded secret token — real wire data.
+**Works end to end:** datagram + bidirectional-stream MITM, conditional tamper, **manual intercept (edit / forward / drop)**, **repeater (resend / inject)**, suspicious-keyword flagging, capture start/pause/disconnect, session teardown under load, runtime target switching, and the `flooding` / `loris` attacks (real QUIC handshakes). Verified end-to-end against **real Chrome** (via `serverCertificateHashes`, no launch flags) and across the whole `vuln_apps/` suite.
 
 **Known limitations:**
 - **`fuzz` and `out_of_joint` are inert** — they send unprotected, hand-built QUIC Initial packets that a compliant server silently drops. Honest about it (they report `0` responses); making them real needs proper Initial-packet crypto (HKDF secrets, header protection, AEAD, 1200-byte padding).
-- **Latency metric is cosmetic** — it measures the proxy's own ~0 ms processing time, not real RTT.
-- **Manual intercept (edit-and-forward) is backend-only** — the queue/decision API exists and is verified for datagrams, but there's no React panel for it yet.
+- **No automated scanner or fuzzer (Intruder-style)** — Legilimens is Burp's *manual core* (proxy, repeater, intercept). Automated brute-force / fuzzing is done today by external scripts (see `vuln_apps/05_no_rate_limit`), not yet in-tool.
+- **`serverCertificateHashes` pinning caps real-world MITM** — you can inspect apps whose client you control (your own / test builds); a shipped client that pins its own cert can't be intercepted. This blocks *every* MITM tool equally (Burp, mitmproxy), not just Legilimens.
 - **Tamper is per-chunk** — JSON split across multiple stream chunks won't match.
-- **No persistence / export / replay** yet; the in-memory log is capped at 500 events.
+- **No persistence / export** yet; the in-memory log is capped at 500 events.
 
 ---
 
 ## Roadmap
 
-- **Interactive intercept panel** — pause, edit, and replay a held datagram/stream chunk before forwarding (backend already supports it).
+- **Intruder-style attack tool** — fire a payload list / range at an injection point from the UI (automated brute-force / fuzzing — the one big Burp feature still missing).
 - **Real `fuzz` / `out_of_joint`** — proper QUIC Initial-packet construction.
 - **Session export** — save captures as NDJSON / HAR-like for offline analysis.
 - **List virtualization** — render only visible log rows for high-volume captures.
-- **Electron packaging** — bundle the Chromium flags and cert trust so there's no manual launch step.
+- **Electron packaging** — bundle backend + UI into one launchable app.
 
 ---
 
