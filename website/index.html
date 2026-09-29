@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Legilimens — WebTransport Inspector</title>
-  <meta name="description" content="Legilimens is a man-in-the-middle inspector for WebTransport: read, edit and replay QUIC datagrams and streams from apps you're testing. Free, open source, Windows prototype.">
+  <meta name="description" content="Inspect WebTransport datagrams and streams, modify JSON payloads, and replay text datagrams in your test environment. An open-source Windows research preview.">
   <meta name="theme-color" content="#EDE4D8">
-  <meta property="og:title" content="Legilimens — reading what others cannot see">
-  <meta property="og:description" content="A man-in-the-middle inspector for WebTransport — the traffic Burp Suite and Wireshark can't see.">
+  <meta property="og:title" content="Legilimens — WebTransport Inspector">
+  <meta property="og:description" content="Inspect WebTransport datagrams and streams, modify JSON payloads, and replay text datagrams in your test environment. An open-source Windows research preview.">
   <meta property="og:type" content="website">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -51,7 +51,7 @@
           <span class="sr-only">Legilimens</span>
           <span aria-hidden="true">legil<span class="dot-i">ı</span>mens</span>
         </h1>
-        <p class="hero__lede">Reading what others cannot see —<br> a live inspector for WebTransport traffic</p>
+        <p class="hero__lede">A closer look at your WebTransport traffic.</p>
       </div>
 
       <div class="container">
@@ -60,7 +60,7 @@
             <ul class="chips" aria-label="Protocols">
               <li>QUIC</li><li>HTTP/3</li><li>UDP</li>
             </ul>
-            <p class="band__quote">Burp Suite + Wireshark, rebuilt for the protocol they can't reach.</p>
+            <p class="band__quote">Inspect payloads. Test changes. Understand how your application responds.</p>
           </div>
 
           <div class="band__center">
@@ -149,9 +149,9 @@
             <ul class="icons" aria-label="Captures">
               <li title="Datagrams"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg><span class="sr-only">Datagrams</span></li>
               <li title="Streams"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18M3 12h13M3 17h8"/></svg><span class="sr-only">Streams</span></li>
-              <li title="Pinned certificates"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span class="sr-only">Pinned certificates</span></li>
+              <li title="Certificate-hash connection setup"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span class="sr-only">Certificate-hash connection setup</span></li>
             </ul>
-            <p>Every datagram and stream chunk, decoded live — no browser flags required.</p>
+            <p>Capture datagrams and stream chunks from clients configured to connect through Legilimens.</p>
           </div>
         </div>
       </div>
@@ -172,9 +172,9 @@
       <h2 class="display why__title" id="why-title">why it<br>exists</h2>
       <div class="why__intro">
         <span class="dot" aria-hidden="true"></span>
-        <p>Burp and Wireshark were built for TCP. WebTransport runs over QUIC — UDP, with its own TLS 1.3 handshake outside the trust chain a normal proxy intercepts, and certificate-hash pinning that defeats the classic “install our CA” trick.</p>
+        <p>Real-time applications exchange data through WebTransport datagrams and streams. Seeing those messages helps you investigate unexpected behavior and test how your application handles different inputs.</p>
       </div>
-      <p class="why__body">Legilimens sits in the middle. Your client connects to it as if it were the real server; Legilimens dials the actual target, relays every datagram and stream at the application layer, and shows you all of it — live — while you edit, hold or replay what passes through.</p>
+      <p class="why__body">Legilimens runs locally between your configured client and upstream server. Inspect captured payloads, apply conditional JSON changes, hold datagrams for review, and replay text datagrams through a selected session. You control the client connection and certificate trust setup.</p>
       <figure class="why__figure">
         <svg class="device" viewBox="0 0 520 300" role="img" aria-labelledby="device-title">
           <title id="device-title">Client, Legilimens and target server as a boombox: traffic flows from the client speaker through the Legilimens display to the target speaker.</title>
@@ -237,44 +237,44 @@
       <div class="toolkit__aside">
         <h2 class="display toolkit__title" id="toolkit-title">what's<br>inside</h2>
         <span class="dot" aria-hidden="true"></span>
-        <p>Burp's manual core — proxy, intercept and repeater — for a protocol nobody else speaks yet. Everything runs locally, bound to loopback, behind a per-launch access token.</p>
+        <p>A focused workspace for inspecting and testing WebTransport applications. Capture traffic, review payloads, and try controlled changes in your local test environment.</p>
       </div>
 
       <ul class="tools">
         <li class="tool">
           <button type="button" class="tool__btn" aria-expanded="true" aria-controls="tool-1">Live capture</button>
           <div class="tool__body" id="tool-1">
-            <p>Every datagram and bidirectional stream chunk in a scrolling log. Filter by <code>SUS</code>, <code>TAMPERED</code>, <code>NORMAL</code> or <code>CONN</code>, search the full text, and pause or cut the wire.</p>
+            <p>Inspect captured datagrams and stream chunks. Filter by event flag and search payload text to find the messages that matter.</p>
           </div>
         </li>
         <li class="tool">
           <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-2">Conditional tamper</button>
           <div class="tool__body" id="tool-2" hidden>
-            <p>Rewrite a JSON field in passing traffic — optionally only where another field matches. <em>Set <code>score</code> to <code>99999</code>, but only where <code>playerName = Seeker</code>.</em></p>
+            <p>Replace a JSON field, optionally only when another field matches. For example, change <code>score</code> only for <code>playerName = Seeker</code>. Modification requires complete JSON within a single datagram or stream chunk.</p>
           </div>
         </li>
         <li class="tool">
           <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-3">Manual intercept</button>
           <div class="tool__body" id="tool-3" hidden>
-            <p>Hold a message mid-flight, then edit, forward or drop it. Scope by direction and type, with a timeout so nothing stalls forever. Binary payloads are editable as Base64.</p>
+            <p>Hold a datagram for review, edit its payload, then forward or drop it. Configure the direction and timeout for your test.</p>
           </div>
         </li>
         <li class="tool">
           <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-4">Repeater</button>
           <div class="tool__body" id="tool-4" hidden>
-            <p>Resend a captured message — or inject an edited one — into a specific live session, toward the server or back to the client. Whitespace and Unicode preserved exactly.</p>
+            <p>Edit and resend a text datagram through a selected live session, toward the server or client. Binary and stream replay are not supported.</p>
           </div>
         </li>
         <li class="tool">
           <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-5">Capture files</button>
           <div class="tool__body" id="tool-5" hidden>
-            <p>Export retained traffic to a versioned JSON file and reopen it later in a read-only offline view — no backend needed. Raw payloads may contain secrets, so handle files with care.</p>
+            <p>Export retained traffic to a versioned JSON file and reopen it in a read-only offline view. Captures may contain sensitive payloads.</p>
           </div>
         </li>
         <li class="tool">
-          <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-6">Practice apps</button>
+          <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-6">Practice targets</button>
           <div class="tool__body" id="tool-6" hidden>
-            <p>Five tiny, deliberately insecure local WebTransport apps — missing auth, trusting the client, leaked secrets, stored XSS, no rate limit — each with a write-up explaining the bug and the fix.</p>
+            <p>Start with the vulnerable target bundled with the desktop app. The source repository also includes five practice applications with documented scenarios.</p>
           </div>
         </li>
       </ul>
@@ -283,7 +283,7 @@
     <!-- ───────────── Download ───────────── -->
     <section class="download" id="download" aria-labelledby="download-title">
       <div class="container download__head">
-        <h2 class="display download__title" id="download-title">tune in</h2>
+        <h2 class="display download__title" id="download-title">download</h2>
         <p>Free and open source. A Windows desktop build bundles the backend and its own Chromium — no Python, Node or terminal needed.</p>
       </div>
 
@@ -356,7 +356,7 @@
               <a class="button button--ghost" data-release="portable" href="#download">Download portable</a>
             </article>
             <article class="dl__card">
-              <p class="dl__kicker">Any platform</p>
+              <p class="dl__kicker">From the repository</p>
               <h3>Run from source</h3>
               <p class="dl__meta">Python 3.12 + Node 24 · Chrome or Edge</p>
               <a class="button button--ghost" href="https://github.com/BlackDranzer777/legilimens#quick-start" target="_blank" rel="noopener">Quick-start guide</a>
@@ -364,15 +364,16 @@
           </div>
 
           <p class="dl__note">
-            <strong>Prototype release.</strong> The build is unsigned, so Windows SmartScreen will warn on first run — choose “More info → Run anyway”. Ports 4433–4436 must be free. Clean-machine installs are still being validated; see the
-            <a href="https://github.com/BlackDranzer777/legilimens#status--honest-caveats" target="_blank" rel="noopener">honest caveats</a>.
+            Research preview for Windows x64. The installer is unsigned, so your browser or Windows may display a warning. Ports 4433–4436 must be available. See
+            <a href="https://github.com/BlackDranzer777/legilimens/releases/tag/v1.0.0-preview.1" target="_blank" rel="noopener">release notes</a>
+            for checksums, setup details and known limitations.
             <span class="dl__released" data-release="date"></span>
           </p>
 
           <ol class="steps" id="how">
-            <li><span>01</span><h4>Launch</h4><p>Open Legilimens. It generates its own short-lived certificate and starts the proxy on <code>:4433</code>.</p></li>
-            <li><span>02</span><h4>Point your client</h4><p>Connect the app you're testing to the proxy using the certificate hash shown in the UI — no browser flags.</p></li>
-            <li><span>03</span><h4>Read the wire</h4><p>Choose the upstream target, press Start, and watch, hold, edit or replay traffic as it flows.</p></li>
+            <li><span>01</span><h4>Launch</h4><p>Open Legilimens and choose your upstream target in Connection settings.</p></li>
+            <li><span>02</span><h4>Connect your client</h4><p>Point your test client at the local proxy and configure it to trust the certificate hash shown in the app.</p></li>
+            <li><span>03</span><h4>Inspect and test</h4><p>Start capture, inspect payloads, and use the supported modification and replay tools to test your application's behavior.</p></li>
           </ol>
         </div>
       </div>
@@ -383,7 +384,7 @@
       <span class="dot" aria-hidden="true"></span>
       <div>
         <h2 id="ethics-title">Only read what you're allowed to read.</h2>
-        <p>Legilimens is built for developers and security testers inspecting applications they own or have explicit permission to assess. Intercepting other people's traffic without consent is illegal in most places. Certificate pinning in shipped clients also limits interception to builds you control — by design.</p>
+        <p>Use Legilimens with applications and systems you own or have explicit permission to test. Client connection and certificate trust must be configured for the proxy.</p>
       </div>
     </section>
   </main>
@@ -393,7 +394,7 @@
     <div class="container footer__inner">
       <div class="footer__brand">
         <p class="footer__word" aria-hidden="true">legilimens</p>
-        <p>The first tool in the <strong>Hallows</strong> security toolkit — instruments for protocols mainstream tools can't reach.</p>
+        <p>Part of the <strong>Hallows</strong> security toolkit. Built for exploring and testing WebTransport applications.</p>
       </div>
       <nav class="footer__links" aria-label="Footer">
         <a href="https://github.com/BlackDranzer777/legilimens" target="_blank" rel="noopener">GitHub</a>

@@ -132,11 +132,11 @@ async function loadRelease() {
 }
 loadRelease();
 
-// Downloads start quietly in the browser's download bar, so confirm on the page.
+// Downloads start quietly in the browser's download bar, so point there. A click
+// cannot confirm the download succeeded, so the message only says it was requested.
 all('installer').forEach((link) => link.addEventListener('click', () => {
   if (!link.href.includes('/releases/download/')) return; // fallback link to the releases page
-  const file = decodeURIComponent(link.href.split('/').pop());
-  setText('status', `Downloading ${file} — check your browser's downloads.`);
+  setText('status', "Download requested. Check your browser's downloads.");
 }));
 
 /* ── Footer year ────────────────────────────── */
