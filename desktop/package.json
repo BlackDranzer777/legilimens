@@ -1,7 +1,7 @@
 {
   "name": "legilimens-desktop",
   "productName": "Legilimens",
-  "version": "1.0.0-preview.1",
+  "version": "1.0.0-preview.2",
   "description": "Legilimens desktop shell — one-click Windows app (Electron + bundled Python backend)",
   "main": "main.cjs",
   "author": "BlackDranzer777",
@@ -24,7 +24,7 @@
     "productName": "Legilimens",
     "directories": {
       "output": "release/preview",
-      "buildResources": "build"
+      "buildResources": "installer"
     },
     "files": [
       "main.cjs",
@@ -56,6 +56,7 @@
       "artifactName": "Legilimens-Setup-${version}.${ext}"
     },
     "nsis": {
+      "license": "../LICENSE",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
