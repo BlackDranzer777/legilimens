@@ -58,6 +58,7 @@ The whole backend runs as **one Python asyncio process** (`python/backend.py`) h
 
 ## Features
 
+- **Capture files** - export all retained traffic to a versioned JSON file and reopen it in a separate read-only view without backend access. Includes session/target metadata and recorded loss indicators; raw payloads may contain secrets. See [capture format, limits, and verification](doc/CAPTURE_FILES.md).
 - **Live capture** — every datagram and bidirectional stream chunk, in real time, in a scrolling log you can filter (`SUS` / `TAMPERED` / `NORMAL` / `CONN`) and full-text search.
 - **Capture controls** — `START` (capture), `PAUSE` (hold the wire, connection stays alive), `DISCONNECT` (hard cut).
 - **Conditional tamper** — rewrite a JSON field in passing traffic, optionally only when another field matches (e.g. *change `score` to `99999`, but only where `playerName = Seeker`*).
@@ -73,8 +74,8 @@ The whole backend runs as **one Python asyncio process** (`python/backend.py`) h
 ## Quick start
 
 ### Prerequisites
-- **Python 3.10+**
-- **Node.js 18+** (for the React UI)
+- **Python 3.12** for the validated Windows dependency locks; other Python/platform combinations are not confirmed.
+- **Node.js 24 LTS** recommended (`.nvmrc`); Electron development requires Node 22.12 or newer. The system Node installation is not upgraded automatically.
 - **Chrome** or **Edge** — WebTransport is not supported in Firefox/Safari
 
 ### 1. Install dependencies
@@ -84,10 +85,16 @@ The whole backend runs as **one Python asyncio process** (`python/backend.py`) h
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # macOS / Linux
-pip install -r python/requirements.txt
+python -m pip install --require-hashes -r python/requirements.txt
 
 # Frontend — React/Vite dependencies (installs into client/)
-npm run install-ui              # = npm --prefix client install
+npm run install-ui              # = npm --prefix client ci
+
+# Optional: pinned audit and packaging tools, including the runtime dependencies
+python -m pip install --require-hashes -r python/requirements-dev.txt
+
+# Optional: desktop development dependencies (use Node 24)
+npm --prefix desktop ci
 ```
 
 ### 2. Run it (one command)
@@ -96,13 +103,17 @@ npm run install-ui              # = npm --prefix client install
 npm run dev
 ```
 
-This **regenerates the TLS cert**, starts the **backend** (proxy `:4433`, target `:4434`, WS log `:4435`, API `:4436`), and starts the **UI** on **http://localhost:5180** — all in one terminal. `Ctrl+C` stops everything.
+This validates or renews the TLS certificate, starts the **backend** (proxy `:4433`, target `:4434`, WS log `:4435`, API `:4436`), and starts the **UI** on **http://localhost:5180** — all in one terminal. `Ctrl+C` stops everything.
 
-> The cert is a self-signed **ECDSA P-256** cert (Chromium rejects RSA here), generated with the `cryptography` library — **no OpenSSL needed**. It is valid for 13 days, and `npm run dev` re-mints it on every launch, so you never hit an expired cert.
+> The cert is a self-signed **ECDSA P-256** cert generated with `cryptography`, with a roughly 13-day validity window. Valid certificates are preserved; missing, invalid, or near-expiry certificates are renewed. Runtime renewal requests a controlled backend restart.
+
+Dependency audit results, regeneration commands, and verification limits are recorded in [Dependency security](doc/DEPENDENCY_SECURITY.md). With the project virtual environment active, run `npm run audit:js` and `npm run audit:python` to recheck the lockfiles. A clean advisory scan is not a product-security certification.
 
 ### 3. Open the UI
 
-Open **plain Chrome or Edge** at **http://localhost:5180** and click **▶ START** to open a WebTransport connection through the proxy.
+Open the **private dashboard link printed by `npm run dev`** in Chrome or Edge. The link supplies a per-launch access token; the UI removes it from the address bar and keeps it in tab-scoped session storage. A plain visit to `http://127.0.0.1:5180` instead displays the token entry screen. Once connected, click **START** to enable capture.
+
+Keep that link and your terminal output private. Restarting the launcher generates a new token; use the new link when access expires. The desktop shell supplies its token automatically.
 
 > **No launch flags needed.** Legilimens serves its cert hash at `/cert-hash`, and the UI connects with the WebTransport `serverCertificateHashes` API — so a normal browser trusts the self-signed cert without any `--origin-to-force-quic-on` / `--ignore-certificate-errors-spki-list` flags. (`npm run gen-cert` still prints those flags if you want the legacy path.)
 
@@ -137,7 +148,7 @@ The inspector UI is a **React 18 + TypeScript** app built on one rule: **data fl
 
 ## Control API (`:4436`)
 
-Everything the UI does goes through this FastAPI surface:
+Everything the UI does goes through this FastAPI surface. **All API routes, including `/health` and `/cert-hash`, require `Authorization: Bearer <control-token>`.** Static UI assets are public but contain no token or captured traffic.
 
 | Method & path | Purpose |
 |---|---|
@@ -152,11 +163,29 @@ Everything the UI does goes through this FastAPI surface:
 Example — enable a conditional tamper rule:
 
 ```bash
-curl -X POST http://localhost:4436/tamper -H 'Content-Type: application/json' \
+curl -X POST http://127.0.0.1:4436/tamper -H "Authorization: Bearer $LEGILIMENS_CONTROL_TOKEN" -H 'Content-Type: application/json' \
   -d '{"enabled":true,"field":"score","value":"99999","matchField":"playerName","matchValue":"Seeker"}'
 ```
 
 Tampered messages appear with an orange **`TAMPERED`** badge in the traffic log.
+
+For the shell example, set `LEGILIMENS_CONTROL_TOKEN` in your shell to the current backend token first. A standalone `python python/backend.py` prints its generated token. For automation, you may supply a cryptographically random 32-128-character URL-safe token through that environment variable before starting the backend; externally supplied tokens do not rotate automatically. Never commit a token or put it in a query string.
+
+### Local security boundary
+
+- The Python API, capture WebSocket, proxy, and bundled practice target bind to `127.0.0.1` only. Remote control is unsupported; do not expose or forward these ports to other machines.
+- Browser control requests allow only exact `http://127.0.0.1` or `http://localhost` origins on the API port and development UI port `5180`. Other origins, including `null`, are rejected even with a valid token. Non-browser clients may omit Origin but must authenticate. Host validation rejects foreign hostnames used in DNS rebinding.
+- The capture WebSocket requires a first message `{"type":"authenticate","token":"<control-token>"}` within five seconds. It sends `{"type":"authenticated"}` before subscribing the client. Failed authentication closes with code `1008`; no captures are sent before authentication.
+- Vite is restricted to loopback and port `5180`; it fails rather than silently switching to an untrusted origin. The built UI is served from the API port. Custom backend port flags work with the built UI; the development UI expects API port `4436`.
+- This boundary protects against unauthenticated control and untrusted browser origins. It is not protection against malware running as your OS user, compromised trusted UI code, or a leaked token. Local HTTP/WS is not encrypted. Standalone practice apps and the legacy `server/` implementation are outside this change.
+
+Security regression checks:
+
+```bash
+.venv/Scripts/python.exe -m unittest discover -s python/tests -v
+npm --prefix client test
+npm --prefix client run build
+```
 
 ---
 
@@ -191,15 +220,15 @@ Then point Legilimens at that app's port (**Upstream Target → `127.0.0.1:445X`
 
 `python/vulnerable_server.py` is a deliberately insecure WebTransport server used as a safe practice target. It has **no authentication**, **leaks a session token** in periodic heartbeat datagrams, **echoes any payload** without validation, and **applies no rate limiting**.
 
-The attack simulator (`python/attacks/`, orchestrated by `python/attack_runner.py`) ships five attacks, launched from the UI with live progress:
+The attack simulator (`python/attacks/`, orchestrated by `python/attack_runner.py`) supports three attacks, launched from the UI with live progress:
 
 | Attack | What it does | Status |
 |---|---|---|
 | `flooding` | Many parallel QUIC handshakes | ✅ Real |
 | `loris` | Slow handshake/drop cycles (slow-loris style) | ✅ Real |
-| `encapsulation` | Raw QUIC packets via Scapy | ⚠️ Needs Administrator + Npcap |
-| `fuzz` | Hand-built QUIC Initial packets | ⚠️ Currently inert — see [caveats](#status--honest-caveats) |
-| `out_of_joint` | Out-of-order QUIC probes | ⚠️ Currently inert — see [caveats](#status--honest-caveats) |
+| `encapsulation` | Raw QUIC packets via Scapy | ⚠️ Needs Administrator + Npcap; not available in the desktop app |
+
+`fuzz.py` and `out_of_joint.py` remain in the source tree but are **not registered**: the API rejects them. They sent hand-built QUIC Initial packets that a compliant server silently drops, so they never produced meaningful results.
 
 ---
 
@@ -215,7 +244,7 @@ python/
   certs.py              ECDSA P-256 cert generation -> python/certs/ (gitignored)
   udp_fix.py            Windows SIO_UDP_CONNRESET fix (keeps the UDP listener alive on reload)
   attack_runner.py      attack lifecycle + live progress over the WS
-  attacks/              flooding · loris · fuzz · out_of_joint · encapsulation
+  attacks/              flooding · loris · encapsulation  (fuzz · out_of_joint: unregistered)
   test_client.py        CLI WebTransport client for browser-free testing
 
 client/src/
@@ -236,26 +265,92 @@ server/                 original Node.js backend — kept for reference, not use
 
 ## Status & honest caveats
 
+Capture/history buffers now have count and byte budgets; old entries can be evicted,
+and oversized capture events can be omitted with a warning. Slow capture subscribers
+are disconnected rather than queued indefinitely. Manual intercept capacity overflow
+drops new matching messages, with a warning; it does not bypass interception. Attack
+concurrency/history is capped, and a stop cleanup timeout reports 504 without claiming
+completion. See `doc/RELEASE_READINESS.md` for exact limits and remaining resource gaps.
+The completed resource-hardening scope, WebSocket envelope/recovery contract, and
+measured local workload are documented in [Resource limits](doc/RESOURCE_LIMITS.md).
+These limits do not establish sustained-load safety or bound total process memory.
+
+Manual intercept settings are validated as one update: rejected requests do not
+partially change scope or release held traffic. Partial tamper updates preserve
+omitted conditions; send empty matching fields explicitly to clear them.
+`POST /attack/{attackId}/stop` waits for cancellation cleanup and returns the current
+status record. A cancelled run reports `stopped`; an already completed or failed run
+retains its original outcome. Stop failures are displayed rather than assumed successful.
+
+### Application compatibility checks
+
+The proxy preserves unmodified wire bytes, including binary datagrams and stream
+chunks containing incomplete UTF-8 sequences. Non-UTF-8 payloads appear as Base64
+previews in the traffic log and as editable Base64 in manual interception. Invalid
+Base64 edits are rejected. The Repeater remains text/datagram-only; binary log
+previews cannot be sent to it.
+
+Capture events retain the full logged payload separately from the short row preview.
+The Repeater requires an explicit live session and preserves captured text, including
+whitespace. It never falls back to another client when a session closes. Successful
+sends indicate queueing, not confirmed delivery. Authenticated `GET /sessions`
+returns `{ "items": [{ "id": "session-uuid", "target": "host:port" }] }`;
+`POST /replay` requires `sessionId`, `direction` (`incoming` or `outgoing`),
+`messageType` (`datagram`), and `payload`. Missing identity returns 422, blank identity
+400, and unavailable sessions 409. Binary/stream replay, separate pre/post-tamper
+evidence pairs remain unimplemented. Capture retention now has explicit byte budgets.
+
+Upstream connections now require either CA/hostname validation (blank target hash)
+or an exact Base64 SHA-256 certificate fingerprint with a currently valid certificate.
+Pinned connections verify the peer before sending the WebTransport CONNECT request.
+The pin identifies the certificate directly; it does not additionally require a CA
+chain or hostname match. The pin check uses aioquic's internal TLS peer-certificate
+accessor and fails closed if it is unavailable; dependency upgrades need regression testing.
+
+The original CONNECT path/query, Origin, and application headers are forwarded to
+the configured target, with the authority rewritten for that target. The proxy waits
+for upstream acceptance and relays rejection status codes instead of reporting an
+early success. It does not relay rejection response bodies. Forwarded credentials
+are only those the client actually supplies: browser cookie scope, login flows,
+client certificates, and application-specific authentication are not emulated.
+
+Run the local regression suite with:
+
+```bash
+.venv/Scripts/python.exe -m unittest discover -s python/tests -v
+```
+
+The suite uses temporary certificates and local aioquic client/server fixtures. It
+checks binary traffic, uni/bidirectional streams, stream ordering and FIN, manual
+interception, original headers, rejection statuses, and certificate validation.
+Compatibility with an independent third-party application is **not confirmed**.
+Clients still need to connect to the proxy and trust its certificate explicitly.
+
+JSON tampering requires a complete JSON value in the current datagram or stream
+chunk. Fragments pass through unchanged; application-specific stream framing and
+message reassembly are not implemented.
+
 Legilimens is a **strong working prototype**, not a shipped product. What's solid and what isn't:
 
-**Works end to end:** datagram + bidirectional-stream MITM, conditional tamper, **manual intercept (edit / forward / drop)**, **repeater (resend / inject)**, suspicious-keyword flagging, capture start/pause/disconnect, session teardown under load, runtime target switching, and the `flooding` / `loris` attacks (real QUIC handshakes). Verified end-to-end against **real Chrome** (via `serverCertificateHashes`, no launch flags) and across the whole `vuln_apps/` suite.
+**Works end to end:** datagram + bidirectional-stream MITM, conditional tamper, **manual intercept (edit / forward / drop)**, **repeater (resend / inject)**, suspicious-keyword flagging, capture start/pause/disconnect, **capture export and offline import**, session teardown under load, runtime target switching, and the `flooding` / `loris` attacks (real QUIC handshakes). Verified end-to-end against **real Chrome** (via `serverCertificateHashes`, no launch flags) and across the whole `vuln_apps/` suite. A **Windows desktop app** (Electron + frozen backend) is available as an unsigned preview; see [`desktop/README.md`](desktop/README.md).
 
 **Known limitations:**
-- **`fuzz` and `out_of_joint` are inert** — they send unprotected, hand-built QUIC Initial packets that a compliant server silently drops. Honest about it (they report `0` responses); making them real needs proper Initial-packet crypto (HKDF secrets, header protection, AEAD, 1200-byte padding).
 - **No automated scanner or fuzzer (Intruder-style)** — Legilimens is Burp's *manual core* (proxy, repeater, intercept). Automated brute-force / fuzzing is done today by external scripts (see `vuln_apps/05_no_rate_limit`), not yet in-tool.
 - **`serverCertificateHashes` pinning caps real-world MITM** — you can inspect apps whose client you control (your own / test builds); a shipped client that pins its own cert can't be intercepted. This blocks *every* MITM tool equally (Burp, mitmproxy), not just Legilimens.
 - **Tamper is per-chunk** — JSON split across multiple stream chunks won't match.
-- **No persistence / export** yet; the in-memory log is capped at 500 events.
+- **No automatic persistence** — live traffic is kept in memory (the UI retains up to 500 events) until you export it to a [capture file](doc/CAPTURE_FILES.md).
+- **Empty datagrams time out in Chromium browsers** — Chrome and Edge fail to receive empty (and subsequent) datagrams, both directly and through the proxy; the cause is still under investigation.
 
 ---
 
 ## Roadmap
 
 - **Intruder-style attack tool** — fire a payload list / range at an injection point from the UI (automated brute-force / fuzzing — the one big Burp feature still missing).
-- **Real `fuzz` / `out_of_joint`** — proper QUIC Initial-packet construction.
-- **Session export** — save captures as NDJSON / HAR-like for offline analysis.
+- **Working `fuzz` / `out_of_joint`** — re-enable them with proper QUIC Initial-packet construction (HKDF secrets, header protection, AEAD, 1200-byte padding).
 - **List virtualization** — render only visible log rows for high-volume captures.
-- **Electron packaging** — bundle backend + UI into one launchable app.
+- **Signed Windows releases** — code signing to remove SmartScreen warnings.
+
+**Done:** session export (versioned JSON capture files with an offline viewer) and Electron packaging (Windows desktop app bundling the backend and UI).
 
 ---
 
@@ -269,7 +364,7 @@ Legilimens is the first tool in the **Hallows** security toolkit — purpose-bui
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). The desktop build bundles third-party software listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ---
 
