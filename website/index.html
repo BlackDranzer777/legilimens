@@ -30,7 +30,11 @@
   <header class="nav">
     <div class="container nav__inner">
       <a class="brand" href="#top" aria-label="Legilimens home">
-        <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3v18h14V13A10 10 0 0 0 5 3Z"/></svg>
+        <svg class="brand__mark" viewBox="0 0 64 64" aria-hidden="true">
+          <rect width="64" height="64" rx="14" fill="#F07A1E"/>
+          <path d="M22 14v30h22" fill="none" stroke="#1E1611" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="44" cy="20" r="5" fill="#1E1611"/>
+        </svg>
         <span>Legilimens</span>
       </a>
       <button class="nav__toggle" type="button" aria-expanded="false" aria-controls="nav-links">
@@ -166,10 +170,10 @@
 
       <!-- Marquee -->
       <div class="container">
-        <a class="marquee" href="#download" aria-label="Try Legilimens now — go to downloads">
+        <a class="marquee" href="#download" aria-label="Capture, inspect, modify and replay WebTransport traffic — go to downloads">
           <div class="marquee__track" aria-hidden="true">
-            <span>try now</span><span>try now</span><span>try now</span><span>try now</span>
-            <span>try now</span><span>try now</span><span>try now</span><span>try now</span>
+            <span>capture</span><span>inspect</span><span>modify</span><span>replay</span>
+            <span>capture</span><span>inspect</span><span>modify</span><span>replay</span>
           </div>
         </a>
       </div>
@@ -184,59 +188,15 @@
       </div>
       <p class="why__body">Legilimens runs locally between your configured client and upstream server. Inspect captured payloads, apply conditional JSON changes, hold datagrams for review, and replay text datagrams through a selected session. You control the client connection and certificate trust setup.</p>
       <figure class="why__figure">
-        <svg class="device" viewBox="0 0 520 300" role="img" aria-labelledby="device-title">
-          <title id="device-title">Client, Legilimens and target server as a boombox: traffic flows from the client speaker through the Legilimens display to the target speaker.</title>
-          <defs>
-            <linearGradient id="wood" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#F6AE6A"/><stop offset=".55" stop-color="#E07F32"/><stop offset="1" stop-color="#B8581F"/>
-            </linearGradient>
-            <radialGradient id="cone" cx=".45" cy=".4" r=".7">
-              <stop offset="0" stop-color="#F5B57A"/><stop offset=".6" stop-color="#D9772F"/><stop offset="1" stop-color="#7A3E14"/>
-            </radialGradient>
-            <radialGradient id="cap" cx=".4" cy=".35" r=".7">
-              <stop offset="0" stop-color="#5A4538"/><stop offset="1" stop-color="#140E0A"/>
-            </radialGradient>
-          </defs>
-          <ellipse cx="260" cy="282" rx="210" ry="10" fill="#1E1611" opacity=".12"/>
-          <!-- top keys -->
-          <g fill="#6B5B50"><rect x="92" y="30" width="26" height="14" rx="3"/><rect x="124" y="30" width="26" height="14" rx="3"/><rect x="370" y="30" width="26" height="14" rx="3"/><rect x="402" y="30" width="26" height="14" rx="3"/></g>
-          <!-- body -->
-          <rect x="10" y="40" width="500" height="220" rx="74" fill="url(#wood)"/>
-          <rect x="26" y="54" width="468" height="192" rx="62" fill="#F7F1E8"/>
-          <!-- legs -->
-          <g fill="#C9BBA9"><rect x="96" y="258" width="16" height="16" rx="3"/><rect x="408" y="258" width="16" height="16" rx="3"/></g>
-          <!-- client cone -->
-          <g>
-            <circle cx="112" cy="150" r="66" fill="#2A1E17"/>
-            <circle cx="112" cy="150" r="54" fill="url(#cone)"/>
-            <circle cx="112" cy="150" r="20" fill="url(#cap)"/>
-          </g>
-          <!-- target cone -->
-          <g>
-            <circle cx="408" cy="150" r="66" fill="#2A1E17"/>
-            <circle cx="408" cy="150" r="54" fill="url(#cone)"/>
-            <circle cx="408" cy="150" r="20" fill="url(#cap)"/>
-          </g>
-          <!-- display -->
-          <rect x="196" y="86" width="128" height="50" rx="10" fill="#1E1611"/>
-          <text x="260" y="108" text-anchor="middle" class="device__lcd">:4433 ⇄ :4434</text>
-          <text x="260" y="125" text-anchor="middle" class="device__lcd device__lcd--dim">READING</text>
-          <!-- buttons -->
-          <g fill="#FBF7F1" stroke="#1E1611" stroke-width="2">
-            <circle cx="214" cy="178" r="11"/><circle cx="246" cy="178" r="11"/><circle cx="278" cy="178" r="11"/><circle cx="310" cy="178" r="11"/>
-          </g>
-          <circle cx="214" cy="178" r="4" fill="#F07A1E"/>
-          <g class="device__keys" text-anchor="middle">
-            <text x="214" y="208">CAP</text><text x="246" y="208">HOLD</text><text x="278" y="208">EDIT</text><text x="310" y="208">SEND</text>
-          </g>
-          <!-- packets travelling client → target -->
-          <g class="packets" fill="#F07A1E">
-            <circle class="pkt" cx="0" cy="0" r="4"/>
-            <circle class="pkt pkt--2" cx="0" cy="0" r="4"/>
-            <circle class="pkt pkt--3" cx="0" cy="0" r="4"/>
-          </g>
-        </svg>
-        <figcaption><span>client</span><span class="arrow" aria-hidden="true">⇄</span><strong>legilimens</strong><span class="arrow" aria-hidden="true">⇄</span><span>target</span></figcaption>
+        <div class="traffic-scene" role="img" aria-label="Traffic flows in both directions from a client, through a laptop running Legilimens, to an upstream server. A packet pauses at Legilimens for inspection.">
+          <img class="traffic-scene__devices" src="assets/traffic-network.png" width="1774" height="887" loading="lazy" decoding="async" alt="">
+          <img class="traffic-scene__screen" src="assets/desktop-traffic.png" width="2139" height="1256" loading="lazy" decoding="async" alt="">
+          <span class="traffic-lane traffic-lane--client" aria-hidden="true"><i></i></span>
+          <span class="traffic-lane traffic-lane--server" aria-hidden="true"><i></i></span>
+          <span class="traffic-lane traffic-lane--client traffic-lane--return" aria-hidden="true"><i></i></span>
+          <span class="traffic-lane traffic-lane--server traffic-lane--return" aria-hidden="true"><i></i></span>
+        </div>
+        <figcaption class="traffic-labels"><span>client</span><strong>legilimens</strong><span>server</span></figcaption>
       </figure>
     </section>
 
@@ -296,51 +256,10 @@
       </div>
 
       <div class="container">
-        <svg class="receiver" viewBox="0 0 900 250" role="img" aria-labelledby="receiver-title">
-          <title id="receiver-title">A vintage radio receiver whose dial is marked with Legilimens' local ports 4433 to 4436 and 5180, needle on 4433.</title>
-          <defs>
-            <linearGradient id="wood2" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#F4A865"/><stop offset=".5" stop-color="#D8752C"/><stop offset="1" stop-color="#A94F1B"/>
-            </linearGradient>
-            <radialGradient id="knob" cx=".4" cy=".35" r=".75">
-              <stop offset="0" stop-color="#F3EEE7"/><stop offset=".55" stop-color="#B9B0A6"/><stop offset="1" stop-color="#5E554D"/>
-            </radialGradient>
-            <linearGradient id="dialglass" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#F7D9A8"/><stop offset="1" stop-color="#EDB56C"/>
-            </linearGradient>
-          </defs>
-          <!-- top knobs -->
-          <g fill="#3A2E26"><rect x="228" y="4" width="22" height="30" rx="5"/><rect x="650" y="4" width="22" height="30" rx="5"/></g>
-          <g fill="#BDB3A8"><rect x="224" y="0" width="30" height="12" rx="4"/><rect x="646" y="0" width="30" height="12" rx="4"/></g>
-          <!-- body -->
-          <rect x="20" y="30" width="860" height="220" rx="46" fill="url(#wood2)"/>
-          <rect x="40" y="48" width="820" height="202" rx="30" fill="#F2ECE3"/>
-          <!-- dial window -->
-          <rect x="300" y="72" width="300" height="150" rx="16" fill="#2A1E17"/>
-          <rect x="312" y="84" width="276" height="126" rx="10" fill="url(#dialglass)"/>
-          <g class="receiver__scale" text-anchor="middle">
-            <text x="340" y="120">4433</text><text x="395" y="120">4434</text><text x="450" y="120">4435</text><text x="505" y="120">4436</text><text x="560" y="120">5180</text>
-          </g>
-          <g stroke="#3A2E26" stroke-width="1.5">
-            <path d="M330 134v10M352 134v6M374 134v6M396 134v10M418 134v6M440 134v6M462 134v10M484 134v6M506 134v6M528 134v10M550 134v6M572 134v10"/>
-          </g>
-          <path d="M330 150h242" stroke="#3A2E26" stroke-width="1.5"/>
-          <text x="450" y="186" text-anchor="middle" class="receiver__label">QUIC · HTTP/3 · LOOPBACK</text>
-          <rect class="needle" x="339" y="92" width="3" height="110" rx="1.5" fill="#D6421A"/>
-          <!-- knobs -->
-          <g>
-            <circle cx="115" cy="165" r="38" fill="#2A1E17"/><circle cx="115" cy="165" r="31" fill="url(#knob)"/>
-            <circle cx="215" cy="165" r="38" fill="#2A1E17"/><circle cx="215" cy="165" r="31" fill="url(#knob)"/>
-            <circle cx="685" cy="165" r="38" fill="#2A1E17"/><circle cx="685" cy="165" r="31" fill="url(#knob)"/>
-            <circle cx="785" cy="165" r="38" fill="#2A1E17"/><circle cx="785" cy="165" r="31" fill="url(#knob)"/>
-          </g>
-          <g stroke="#2A1E17" stroke-width="3" stroke-linecap="round">
-            <path d="M115 165l-12-16M215 165l14-14M685 165l0-20M785 165l-15 12"/>
-          </g>
-          <g class="receiver__knobs" text-anchor="middle">
-            <text x="115" y="104">CAPTURE</text><text x="215" y="104">TAMPER</text><text x="685" y="104">INTERCEPT</text><text x="785" y="104">REPLAY</text>
-          </g>
-        </svg>
+        <div class="download__art" aria-hidden="true">
+          <img src="assets/legilimens-laptop.png" width="1536" height="1024" loading="lazy" decoding="async" alt="">
+          <img class="download__screen" src="assets/desktop-traffic.png" width="2139" height="1256" loading="lazy" decoding="async" alt="">
+        </div>
 
         <div class="dl">
           <div class="dl__grid">
