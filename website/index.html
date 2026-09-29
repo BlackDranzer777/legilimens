@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Legilimens — WebTransport Inspector</title>
+  <meta name="description" content="Legilimens is a man-in-the-middle inspector for WebTransport: read, edit and replay QUIC datagrams and streams from apps you're testing. Free, open source, Windows prototype.">
+  <meta name="theme-color" content="#EDE4D8">
+  <meta property="og:title" content="Legilimens — reading what others cannot see">
+  <meta property="og:description" content="A man-in-the-middle inspector for WebTransport — the traffic Burp Suite and Wireshark can't see.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <!-- ───────────── Navigation ───────────── -->
+  <header class="nav">
+    <div class="container nav__inner">
+      <a class="brand" href="#top" aria-label="Legilimens home">
+        <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3v18h14V13A10 10 0 0 0 5 3Z"/></svg>
+        <span>Legilimens</span>
+      </a>
+      <button class="nav__toggle" type="button" aria-expanded="false" aria-controls="nav-links">
+        <span class="sr-only">Menu</span><span></span><span></span>
+      </button>
+      <nav id="nav-links" class="nav__links" aria-label="Primary">
+        <a href="#why">About</a>
+        <a href="#toolkit">Features</a>
+        <a href="#how">How it works</a>
+        <a href="https://github.com/BlackDranzer777/legilimens#readme" target="_blank" rel="noopener">Docs</a>
+      </nav>
+      <div class="nav__end">
+        <a class="nav__cta" href="#download">Download</a>
+        <a class="nav__gh" href="https://github.com/BlackDranzer777/legilimens" target="_blank" rel="noopener" aria-label="Legilimens on GitHub">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ───────────── Hero ───────────── -->
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="container">
+        <h1 class="display hero__title" id="hero-title">
+          <span class="sr-only">Legilimens</span>
+          <span aria-hidden="true">legil<span class="dot-i">ı</span>mens</span>
+        </h1>
+        <p class="hero__lede">Reading what others cannot see —<br>a live inspector for WebTransport traffic</p>
+      </div>
+
+      <div class="container">
+        <div class="band">
+          <div class="band__left">
+            <ul class="chips" aria-label="Protocols">
+              <li>QUIC</li><li>HTTP/3</li><li>UDP</li>
+            </ul>
+            <p class="band__quote">Burp Suite + Wireshark, rebuilt for the protocol they can't reach.</p>
+          </div>
+
+          <div class="band__center">
+            <div class="showcase" aria-roledescription="carousel" aria-label="Legilimens workspaces">
+              <div class="halo" aria-hidden="true"></div>
+
+              <!-- App window mockup -->
+              <div class="app" role="img" aria-live="polite" aria-label="Legilimens traffic view">
+                <div class="app__titlebar">
+                  <span class="app__name">Legilimens</span>
+                  <span class="app__status"><i></i>Proxy active</span>
+                  <span class="app__win" aria-hidden="true"><b></b><b></b><b></b></span>
+                </div>
+                <div class="app__body">
+                  <aside class="app__side" aria-hidden="true">
+                    <span class="app__logo">L</span>
+                    <span class="app__ico" data-for="traffic"></span>
+                    <span class="app__ico" data-for="intercept"></span>
+                    <span class="app__ico" data-for="repeater"></span>
+                    <span class="app__ico"></span>
+                  </aside>
+
+                  <div class="app__view" data-view="traffic">
+                    <div class="app__head"><b>Traffic</b><span>5 events</span></div>
+                    <div class="filters"><span class="on">ALL</span><span>SUS</span><span>TAMPERED</span><span>CONN</span></div>
+                    <table class="log">
+                      <tbody>
+                        <tr><td>03.038</td><td class="dir">→</td><td>DGRAM</td><td class="pl">{"playerName":"Seeker","score":120}</td><td><em class="f-n">NORMAL</em></td></tr>
+                        <tr><td>03.041</td><td class="dir">←</td><td>DGRAM</td><td class="pl">{"type":"heartbeat","token":"eyJhbGci…</td><td><em class="f-s">SUS</em></td></tr>
+                        <tr class="hl"><td>03.112</td><td class="dir">→</td><td>STREAM</td><td class="pl">{"playerName":"Seeker","score":99999}</td><td><em class="f-t">TAMPERED</em></td></tr>
+                        <tr><td>03.206</td><td class="dir">←</td><td>DGRAM</td><td class="pl">{"type":"echo","original":"ping"}</td><td><em class="f-n">NORMAL</em></td></tr>
+                        <tr><td>03.310</td><td class="dir">⇄</td><td>CONN</td><td class="pl">session 7f3a… established</td><td><em class="f-c">CONN</em></td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div class="app__view" data-view="intercept" hidden>
+                    <div class="app__head"><b>Intercept</b><span class="pill">1 held</span></div>
+                    <div class="held">
+                      <div class="held__meta"><span>→ outgoing · DATAGRAM</span><span>auto-forward in 24s</span></div>
+<pre class="code">{
+  "playerName": "Seeker",
+  "score": <mark>99999</mark>,
+  "level": 7
+}</pre>
+                      <div class="held__actions"><span class="btn btn--o">Forward</span><span class="btn">Edit</span><span class="btn btn--d">Drop</span></div>
+                    </div>
+                  </div>
+
+                  <div class="app__view" data-view="repeater" hidden>
+                    <div class="app__head"><b>Repeater</b><span>session 7f3a · :4434</span></div>
+                    <div class="rep">
+                      <div>
+                        <small>Request → server</small>
+<pre class="code">{"type":"ping",
+ "nonce":"a91c"}</pre>
+                      </div>
+                      <div>
+                        <small>Response</small>
+<pre class="code">{"type":"echo",
+ "original":"ping"}</pre>
+                      </div>
+                    </div>
+                    <div class="held__actions"><span class="btn btn--o">Send datagram</span><span class="muted">queued ✓</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="thumbs" role="tablist" aria-label="Choose a workspace">
+                <button class="thumbs__arrow" type="button" data-step="-1" aria-label="Previous workspace">‹</button>
+                <button class="thumb" type="button" role="tab" aria-selected="true" data-target="traffic" aria-label="Traffic">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+                </button>
+                <button class="thumb" type="button" role="tab" aria-selected="false" data-target="intercept" aria-label="Intercept">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6Z"/></svg>
+                </button>
+                <button class="thumb" type="button" role="tab" aria-selected="false" data-target="repeater" aria-label="Repeater">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h14l-4-4M20 16H6l4 4"/></svg>
+                </button>
+                <button class="thumbs__arrow" type="button" data-step="1" aria-label="Next workspace">›</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="band__right">
+            <ul class="icons" aria-label="Captures">
+              <li title="Datagrams"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg><span class="sr-only">Datagrams</span></li>
+              <li title="Streams"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18M3 12h13M3 17h8"/></svg><span class="sr-only">Streams</span></li>
+              <li title="Pinned certificates"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span class="sr-only">Pinned certificates</span></li>
+            </ul>
+            <p>Every datagram and stream chunk, decoded live — no browser flags required.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Marquee -->
+      <div class="container">
+        <a class="marquee" href="#download" aria-label="Try Legilimens now — go to downloads">
+          <div class="marquee__track" aria-hidden="true">
+            <span>try now</span><span>try now</span><span>try now</span><span>try now</span>
+            <span>try now</span><span>try now</span><span>try now</span><span>try now</span>
+          </div>
+        </a>
+      </div>
+    </section>
+
+    <!-- ───────────── Why ───────────── -->
+    <section class="why container" id="why" aria-labelledby="why-title">
+      <h2 class="display why__title" id="why-title">why it<br>exists</h2>
+      <div class="why__intro">
+        <span class="dot" aria-hidden="true"></span>
+        <p>Burp and Wireshark were built for TCP. WebTransport runs over QUIC — UDP, with its own TLS 1.3 handshake outside the trust chain a normal proxy intercepts, and certificate-hash pinning that defeats the classic “install our CA” trick.</p>
+      </div>
+      <p class="why__body">Legilimens sits in the middle. Your client connects to it as if it were the real server; Legilimens dials the actual target, relays every datagram and stream at the application layer, and shows you all of it — live — while you edit, hold or replay what passes through.</p>
+      <figure class="why__figure">
+        <svg class="device" viewBox="0 0 520 300" role="img" aria-labelledby="device-title">
+          <title id="device-title">Client, Legilimens and target server as a boombox: traffic flows from the client speaker through the Legilimens display to the target speaker.</title>
+          <defs>
+            <linearGradient id="wood" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#F6AE6A"/><stop offset=".55" stop-color="#E07F32"/><stop offset="1" stop-color="#B8581F"/>
+            </linearGradient>
+            <radialGradient id="cone" cx=".45" cy=".4" r=".7">
+              <stop offset="0" stop-color="#F5B57A"/><stop offset=".6" stop-color="#D9772F"/><stop offset="1" stop-color="#7A3E14"/>
+            </radialGradient>
+            <radialGradient id="cap" cx=".4" cy=".35" r=".7">
+              <stop offset="0" stop-color="#5A4538"/><stop offset="1" stop-color="#140E0A"/>
+            </radialGradient>
+          </defs>
+          <ellipse cx="260" cy="282" rx="210" ry="10" fill="#1E1611" opacity=".12"/>
+          <!-- top keys -->
+          <g fill="#6B5B50"><rect x="92" y="30" width="26" height="14" rx="3"/><rect x="124" y="30" width="26" height="14" rx="3"/><rect x="370" y="30" width="26" height="14" rx="3"/><rect x="402" y="30" width="26" height="14" rx="3"/></g>
+          <!-- body -->
+          <rect x="10" y="40" width="500" height="220" rx="74" fill="url(#wood)"/>
+          <rect x="26" y="54" width="468" height="192" rx="62" fill="#F7F1E8"/>
+          <!-- legs -->
+          <g fill="#C9BBA9"><rect x="96" y="258" width="16" height="16" rx="3"/><rect x="408" y="258" width="16" height="16" rx="3"/></g>
+          <!-- client cone -->
+          <g>
+            <circle cx="112" cy="150" r="66" fill="#2A1E17"/>
+            <circle cx="112" cy="150" r="54" fill="url(#cone)"/>
+            <circle cx="112" cy="150" r="20" fill="url(#cap)"/>
+          </g>
+          <!-- target cone -->
+          <g>
+            <circle cx="408" cy="150" r="66" fill="#2A1E17"/>
+            <circle cx="408" cy="150" r="54" fill="url(#cone)"/>
+            <circle cx="408" cy="150" r="20" fill="url(#cap)"/>
+          </g>
+          <!-- display -->
+          <rect x="196" y="86" width="128" height="50" rx="10" fill="#1E1611"/>
+          <text x="260" y="108" text-anchor="middle" class="device__lcd">:4433 ⇄ :4434</text>
+          <text x="260" y="125" text-anchor="middle" class="device__lcd device__lcd--dim">READING</text>
+          <!-- buttons -->
+          <g fill="#FBF7F1" stroke="#1E1611" stroke-width="2">
+            <circle cx="214" cy="178" r="11"/><circle cx="246" cy="178" r="11"/><circle cx="278" cy="178" r="11"/><circle cx="310" cy="178" r="11"/>
+          </g>
+          <circle cx="214" cy="178" r="4" fill="#F07A1E"/>
+          <g class="device__keys" text-anchor="middle">
+            <text x="214" y="208">CAP</text><text x="246" y="208">HOLD</text><text x="278" y="208">EDIT</text><text x="310" y="208">SEND</text>
+          </g>
+          <!-- packets travelling client → target -->
+          <g class="packets" fill="#F07A1E">
+            <circle class="pkt" cx="0" cy="0" r="4"/>
+            <circle class="pkt pkt--2" cx="0" cy="0" r="4"/>
+            <circle class="pkt pkt--3" cx="0" cy="0" r="4"/>
+          </g>
+        </svg>
+        <figcaption><span>client</span><span class="arrow" aria-hidden="true">⇄</span><strong>legilimens</strong><span class="arrow" aria-hidden="true">⇄</span><span>target</span></figcaption>
+      </figure>
+    </section>
+
+    <!-- ───────────── Toolkit ───────────── -->
+    <section class="toolkit container" id="toolkit" aria-labelledby="toolkit-title">
+      <div class="toolkit__aside">
+        <h2 class="display toolkit__title" id="toolkit-title">what's<br>inside</h2>
+        <span class="dot" aria-hidden="true"></span>
+        <p>Burp's manual core — proxy, intercept and repeater — for a protocol nobody else speaks yet. Everything runs locally, bound to loopback, behind a per-launch access token.</p>
+      </div>
+
+      <ul class="tools">
+        <li class="tool">
+          <button type="button" class="tool__btn" aria-expanded="true" aria-controls="tool-1">Live capture</button>
+          <div class="tool__body" id="tool-1">
+            <p>Every datagram and bidirectional stream chunk in a scrolling log. Filter by <code>SUS</code>, <code>TAMPERED</code>, <code>NORMAL</code> or <code>CONN</code>, search the full text, and pause or cut the wire.</p>
+          </div>
+        </li>
+        <li class="tool">
+          <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-2">Conditional tamper</button>
+          <div class="tool__body" id="tool-2" hidden>
+            <p>Rewrite a JSON field in passing traffic — optionally only where another field matches. <em>Set <code>score</code> to <code>99999</code>, but only where <code>playerName = Seeker</code>.</em></p>
+          </div>
+        </li>
+        <li class="tool">
+          <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-3">Manual intercept</button>
+          <div class="tool__body" id="tool-3" hidden>
+            <p>Hold a message mid-flight, then edit, forward or drop it. Scope by direction and type, with a timeout so nothing stalls forever. Binary payloads are editable as Base64.</p>
+          </div>
+        </li>
+        <li class="tool">
+          <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-4">Repeater</button>
+          <div class="tool__body" id="tool-4" hidden>
+            <p>Resend a captured message — or inject an edited one — into a specific live session, toward the server or back to the client. Whitespace and Unicode preserved exactly.</p>
+          </div>
+        </li>
+        <li class="tool">
+          <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-5">Capture files</button>
+          <div class="tool__body" id="tool-5" hidden>
+            <p>Export retained traffic to a versioned JSON file and reopen it later in a read-only offline view — no backend needed. Raw payloads may contain secrets, so handle files with care.</p>
+          </div>
+        </li>
+        <li class="tool">
+          <button type="button" class="tool__btn" aria-expanded="false" aria-controls="tool-6">Practice apps</button>
+          <div class="tool__body" id="tool-6" hidden>
+            <p>Five tiny, deliberately insecure local WebTransport apps — missing auth, trusting the client, leaked secrets, stored XSS, no rate limit — each with a write-up explaining the bug and the fix.</p>
+          </div>
+        </li>
+      </ul>
+    </section>
+
+    <!-- ───────────── Download ───────────── -->
+    <section class="download" id="download" aria-labelledby="download-title">
+      <div class="container download__head">
+        <h2 class="display download__title" id="download-title">tune in</h2>
+        <p>Free and open source. A Windows desktop build bundles the backend and its own Chromium — no Python, Node or terminal needed.</p>
+      </div>
+
+      <div class="container">
+        <svg class="receiver" viewBox="0 0 900 250" role="img" aria-labelledby="receiver-title">
+          <title id="receiver-title">A vintage radio receiver whose dial is marked with Legilimens' local ports 4433 to 4436 and 5180, needle on 4433.</title>
+          <defs>
+            <linearGradient id="wood2" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#F4A865"/><stop offset=".5" stop-color="#D8752C"/><stop offset="1" stop-color="#A94F1B"/>
+            </linearGradient>
+            <radialGradient id="knob" cx=".4" cy=".35" r=".75">
+              <stop offset="0" stop-color="#F3EEE7"/><stop offset=".55" stop-color="#B9B0A6"/><stop offset="1" stop-color="#5E554D"/>
+            </radialGradient>
+            <linearGradient id="dialglass" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#F7D9A8"/><stop offset="1" stop-color="#EDB56C"/>
+            </linearGradient>
+          </defs>
+          <!-- top knobs -->
+          <g fill="#3A2E26"><rect x="228" y="4" width="22" height="30" rx="5"/><rect x="650" y="4" width="22" height="30" rx="5"/></g>
+          <g fill="#BDB3A8"><rect x="224" y="0" width="30" height="12" rx="4"/><rect x="646" y="0" width="30" height="12" rx="4"/></g>
+          <!-- body -->
+          <rect x="20" y="30" width="860" height="220" rx="46" fill="url(#wood2)"/>
+          <rect x="40" y="48" width="820" height="202" rx="30" fill="#F2ECE3"/>
+          <!-- dial window -->
+          <rect x="300" y="72" width="300" height="150" rx="16" fill="#2A1E17"/>
+          <rect x="312" y="84" width="276" height="126" rx="10" fill="url(#dialglass)"/>
+          <g class="receiver__scale" text-anchor="middle">
+            <text x="340" y="120">4433</text><text x="395" y="120">4434</text><text x="450" y="120">4435</text><text x="505" y="120">4436</text><text x="560" y="120">5180</text>
+          </g>
+          <g stroke="#3A2E26" stroke-width="1.5">
+            <path d="M330 134v10M352 134v6M374 134v6M396 134v10M418 134v6M440 134v6M462 134v10M484 134v6M506 134v6M528 134v10M550 134v6M572 134v10"/>
+          </g>
+          <path d="M330 150h242" stroke="#3A2E26" stroke-width="1.5"/>
+          <text x="450" y="186" text-anchor="middle" class="receiver__label">QUIC · HTTP/3 · LOOPBACK</text>
+          <rect class="needle" x="339" y="92" width="3" height="110" rx="1.5" fill="#D6421A"/>
+          <!-- knobs -->
+          <g>
+            <circle cx="115" cy="165" r="38" fill="#2A1E17"/><circle cx="115" cy="165" r="31" fill="url(#knob)"/>
+            <circle cx="215" cy="165" r="38" fill="#2A1E17"/><circle cx="215" cy="165" r="31" fill="url(#knob)"/>
+            <circle cx="685" cy="165" r="38" fill="#2A1E17"/><circle cx="685" cy="165" r="31" fill="url(#knob)"/>
+            <circle cx="785" cy="165" r="38" fill="#2A1E17"/><circle cx="785" cy="165" r="31" fill="url(#knob)"/>
+          </g>
+          <g stroke="#2A1E17" stroke-width="3" stroke-linecap="round">
+            <path d="M115 165l-12-16M215 165l14-14M685 165l0-20M785 165l-15 12"/>
+          </g>
+          <g class="receiver__knobs" text-anchor="middle">
+            <text x="115" y="104">CAPTURE</text><text x="215" y="104">TAMPER</text><text x="685" y="104">INTERCEPT</text><text x="785" y="104">REPLAY</text>
+          </g>
+        </svg>
+
+        <div class="dl">
+          <div class="dl__grid">
+            <article class="dl__card dl__card--primary">
+              <p class="dl__kicker">Recommended</p>
+              <h3>Windows installer</h3>
+              <p class="dl__meta"><span data-release="version">v1.0.0</span> · Windows x64<span class="dl__size" data-release="installer-size"></span></p>
+              <a class="button button--orange" data-release="installer" href="https://github.com/BlackDranzer777/legilimens/releases/latest">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>
+                Download for Windows
+              </a>
+            </article>
+            <article class="dl__card">
+              <p class="dl__kicker">No install</p>
+              <h3>Portable zip</h3>
+              <p class="dl__meta">Unzip and run <code>Legilimens.exe</code><span class="dl__size" data-release="portable-size"></span></p>
+              <a class="button button--ghost" data-release="portable" href="https://github.com/BlackDranzer777/legilimens/releases/latest">Download portable</a>
+            </article>
+            <article class="dl__card">
+              <p class="dl__kicker">Any platform</p>
+              <h3>Run from source</h3>
+              <p class="dl__meta">Python 3.12 + Node 24 · Chrome or Edge</p>
+              <a class="button button--ghost" href="https://github.com/BlackDranzer777/legilimens#quick-start" target="_blank" rel="noopener">Quick-start guide</a>
+            </article>
+          </div>
+
+          <p class="dl__note">
+            <strong>Prototype release.</strong> The build is unsigned, so Windows SmartScreen will warn on first run — choose “More info → Run anyway”. Ports 4433–4436 must be free. Clean-machine installs are still being validated; see the
+            <a href="https://github.com/BlackDranzer777/legilimens#status--honest-caveats" target="_blank" rel="noopener">honest caveats</a>.
+            <span class="dl__released" data-release="date"></span>
+          </p>
+
+          <ol class="steps" id="how">
+            <li><span>01</span><h4>Launch</h4><p>Open Legilimens. It generates its own short-lived certificate and starts the proxy on <code>:4433</code>.</p></li>
+            <li><span>02</span><h4>Point your client</h4><p>Connect the app you're testing to the proxy using the certificate hash shown in the UI — no browser flags.</p></li>
+            <li><span>03</span><h4>Read the wire</h4><p>Choose the upstream target, press Start, and watch, hold, edit or replay traffic as it flows.</p></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────── Responsible use ───────────── -->
+    <section class="ethics container" aria-labelledby="ethics-title">
+      <span class="dot" aria-hidden="true"></span>
+      <div>
+        <h2 id="ethics-title">Only read what you're allowed to read.</h2>
+        <p>Legilimens is built for developers and security testers inspecting applications they own or have explicit permission to assess. Intercepting other people's traffic without consent is illegal in most places. Certificate pinning in shipped clients also limits interception to builds you control — by design.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ───────────── Footer ───────────── -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <p class="footer__word" aria-hidden="true">legilimens</p>
+        <p>The first tool in the <strong>Hallows</strong> security toolkit — instruments for protocols mainstream tools can't reach.</p>
+      </div>
+      <nav class="footer__links" aria-label="Footer">
+        <a href="https://github.com/BlackDranzer777/legilimens" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/BlackDranzer777/legilimens/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/BlackDranzer777/legilimens/issues" target="_blank" rel="noopener">Report an issue</a>
+        <a href="https://github.com/BlackDranzer777/legilimens#license" target="_blank" rel="noopener">MIT License</a>
+      </nav>
+    </div>
+    <div class="container footer__base">
+      <span>© <span id="year">2026</span> Legilimens</span>
+      <span>Made for WebTransport, over QUIC.</span>
+    </div>
+  </footer>
+
+  <script src="js/main.js" defer></script>
+</body>
+</html>
