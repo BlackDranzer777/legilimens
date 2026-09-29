@@ -82,39 +82,62 @@ if ('IntersectionObserver' in window) {
   revealTargets.forEach((el) => { el.classList.add('reveal'); io.observe(el); });
 }
 
-/* ── Latest release → download buttons ──────── */
+/* ── Newest release → download buttons ──────── */
+// Buttons link straight to the release file, so the browser downloads it without
+// leaving this page. The HTML ships a direct link to the current version; this
+// swaps in the newest published installer (pre-releases included).
+const RELEASES_PAGE = `https://github.com/${REPO}/releases`;
+// Binary MB, matching what GitHub and browsers display for the file.
 const formatSize = (bytes) => `${(bytes / 1048576).toFixed(0)} MB`;
-const setText = (key, text) => document.querySelectorAll(`[data-release="${key}"]`).forEach((el) => { el.textContent = text; });
+const all = (key) => document.querySelectorAll(`[data-release="${key}"]`);
+const setText = (key, text) => all(key).forEach((el) => { el.textContent = text; });
+const setHref = (key, url) => all(key).forEach((a) => { a.href = url; });
 
 async function loadRelease() {
+  let releases;
   try {
-    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+    // /releases/latest skips pre-releases, so list them (newest first; drafts are never public).
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=10`, {
       headers: { Accept: 'application/vnd.github+json' },
     });
-    if (!res.ok) return; // no published release yet → keep the releases-page fallback
-    const release = await res.json();
-    const assets = release.assets || [];
-    const installer = assets.find((a) => /setup.*\.exe$/i.test(a.name)) || assets.find((a) => /\.exe$/i.test(a.name));
-    const portable = assets.find((a) => /\.zip$/i.test(a.name));
-
-    if (release.tag_name) setText('version', release.tag_name.startsWith('v') ? release.tag_name : `v${release.tag_name}`);
-    if (installer) {
-      document.querySelectorAll('[data-release="installer"]').forEach((a) => { a.href = installer.browser_download_url; });
-      setText('installer-size', formatSize(installer.size));
-    }
-    if (portable) {
-      document.querySelectorAll('[data-release="portable"]').forEach((a) => { a.href = portable.browser_download_url; });
-      setText('portable-size', formatSize(portable.size));
-    }
-    if (release.published_at) {
-      const date = new Date(release.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-      setText('date', `Released ${date}`);
-    }
+    if (res.status === 403 || res.status === 429) return; // rate-limited: keep the built-in direct link
+    releases = res.ok ? await res.json() : []; // 404 = private repo: same as "nothing published"
   } catch {
-    // Offline or rate-limited: the static links still work.
+    return; // offline: keep the built-in direct link
+  }
+
+  const isInstaller = (a) => /\.exe$/i.test(a.name);
+  const release = releases.find((r) => !r.draft && (r.assets || []).some(isInstaller));
+  if (!release) {
+    // Nothing downloadable is published, so a direct link would hit GitHub's 404 page.
+    setHref('installer', RELEASES_PAGE);
+    return;
+  }
+
+  const assets = release.assets;
+  const installer = assets.find((a) => /setup.*\.exe$/i.test(a.name)) || assets.find(isInstaller);
+  const portable = assets.find((a) => /\.zip$/i.test(a.name));
+  setText('version', release.tag_name.startsWith('v') ? release.tag_name : `v${release.tag_name}`);
+  setHref('installer', installer.browser_download_url);
+  setText('installer-size', formatSize(installer.size));
+  if (portable) {
+    setHref('portable', portable.browser_download_url);
+    setText('portable-size', formatSize(portable.size));
+    all('portable-card').forEach((card) => { card.hidden = false; });
+  }
+  if (release.published_at) {
+    const date = new Date(release.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    setText('date', `Released ${date}`);
   }
 }
 loadRelease();
+
+// Downloads start quietly in the browser's download bar, so confirm on the page.
+all('installer').forEach((link) => link.addEventListener('click', () => {
+  if (!link.href.includes('/releases/download/')) return; // fallback link to the releases page
+  const file = decodeURIComponent(link.href.split('/').pop());
+  setText('status', `Downloading ${file} — check your browser's downloads.`);
+}));
 
 /* ── Footer year ────────────────────────────── */
 const year = document.getElementById('year');

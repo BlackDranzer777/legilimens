@@ -523,7 +523,11 @@ button { font: inherit; color: inherit; }
   background: var(--ink); color: var(--on-ink);
   padding: calc(58px + clamp(32px, 4vw, 56px)) clamp(20px, 4vw, 56px) clamp(36px, 5vw, 64px);
 }
-.dl__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+/* auto-fit: two or three cards share the row evenly (portable appears only when a zip exists). */
+.dl__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.dl__card[hidden] { display: none; }
+.dl__status { min-height: 1.4em; margin-top: 10px; font-size: 13.5px; color: var(--muted); }
+.dl__status:empty { display: none; }
 .dl__card {
   display: flex; flex-direction: column;
   padding: 24px;

@@ -339,17 +339,21 @@
             <article class="dl__card dl__card--primary">
               <p class="dl__kicker">Recommended</p>
               <h3>Windows installer</h3>
-              <p class="dl__meta"><span data-release="version">v1.0.0</span> · Windows x64<span class="dl__size" data-release="installer-size"></span></p>
-              <a class="button button--orange" data-release="installer" href="https://github.com/BlackDranzer777/legilimens/releases/latest">
+              <p class="dl__meta"><span data-release="version">v1.0.0-preview.1</span> · Windows x64<span class="dl__size" data-release="installer-size">138 MB</span></p>
+              <!-- Direct file link: the browser downloads it without leaving this page.
+                   main.js swaps in the newest release's installer when one is published. -->
+              <a class="button button--orange" data-release="installer"
+                 href="https://github.com/BlackDranzer777/legilimens/releases/download/v1.0.0-preview.1/Legilimens-Setup-1.0.0-preview.1.exe">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>
                 Download for Windows
               </a>
+              <p class="dl__status" data-release="status" role="status" aria-live="polite"></p>
             </article>
-            <article class="dl__card">
+            <article class="dl__card" data-release="portable-card" hidden>
               <p class="dl__kicker">No install</p>
               <h3>Portable zip</h3>
               <p class="dl__meta">Unzip and run <code>Legilimens.exe</code><span class="dl__size" data-release="portable-size"></span></p>
-              <a class="button button--ghost" data-release="portable" href="https://github.com/BlackDranzer777/legilimens/releases/latest">Download portable</a>
+              <a class="button button--ghost" data-release="portable" href="#download">Download portable</a>
             </article>
             <article class="dl__card">
               <p class="dl__kicker">Any platform</p>
