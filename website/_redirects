@@ -1,0 +1,4 @@
+# Netlify rules. /download serves the same page (a rewrite, not a redirect), so the
+# address stays /download: shareable links land on the download section, and link
+# previews are fetched for this address instead of reusing one cached for "/".
+/download  /index.html  200

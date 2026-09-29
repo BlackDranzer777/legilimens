@@ -139,6 +139,11 @@ all('installer').forEach((link) => link.addEventListener('click', () => {
   setText('status', "Download requested. Check your browser's downloads.");
 }));
 
+/* ── /download (a Netlify rewrite of this page) lands on the download section ── */
+if (location.pathname.replace(/\/+$/, '') === '/download') {
+  document.getElementById('download')?.scrollIntoView({ behavior: 'instant' });
+}
+
 /* ── Footer year ────────────────────────────── */
 const year = document.getElementById('year');
 if (year) year.textContent = String(new Date().getFullYear());
