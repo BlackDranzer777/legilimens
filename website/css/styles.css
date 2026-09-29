@@ -275,12 +275,7 @@ button { font: inherit; color: inherit; }
   padding-top: 10px;
   background: #222629;
 }
-.app__logo {
-  display: grid; place-items: center;
-  width: 26px; height: 26px; border-radius: 7px;
-  background: #F26A2E; color: #fff; font-weight: 600; font-size: 13px;
-  margin-bottom: 4px;
-}
+.app__logo { display: block; width: 26px; height: 26px; flex: none; margin-bottom: 4px; }
 .app__ico { width: 26px; height: 20px; border-radius: 5px; background: #33383C; transition: background .25s; }
 .app__ico.is-on { background: #F26A2E; }
 
