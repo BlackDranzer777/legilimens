@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { TrafficEvent, useStore } from '../store/useStore'
+import CaptureActions from './CaptureActions'
 
 function formatTime(ts: number) {
   const d = new Date(ts)
@@ -35,7 +36,7 @@ function FlagBadge({ flag, type }: { flag?: string; type: string }) {
   return <span className="badge badge-normal">NORMAL</span>
 }
 
-function EventRow({ event }: { event: TrafficEvent }) {
+function EventRow({ event, offline = false }: { event: TrafficEvent; offline?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const sendToRepeater = useStore((s) => s.sendToRepeater)
 
@@ -51,8 +52,11 @@ function EventRow({ event }: { event: TrafficEvent }) {
       <tr
         className={`traffic-row ${expanded ? 'expanded' : ''}`}
         onClick={() => setExpanded((v) => !v)}
+        tabIndex={0}
+        aria-expanded={expanded}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded((v) => !v) } }}
       >
-        <td style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{formatTime(event.timestamp)}</td>
+        <td title={new Date(event.timestamp).toISOString()} style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{formatTime(event.timestamp)}</td>
         <td>
           {event.direction === 'incoming' ? (
             <span className="dir-in">→</span>
@@ -66,7 +70,7 @@ function EventRow({ event }: { event: TrafficEvent }) {
             : event.type.toUpperCase()}
         </td>
         <td style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{formatSize(event.rawSize)}</td>
-        <td className="payload-cell">{formatPayload(event.payload)}</td>
+        <td className="payload-cell">{event.payloadPreview ?? formatPayload(event.payload).slice(0, 300)}</td>
         <td>
           <FlagBadge flag={event.flag} type={event.type} />
         </td>
@@ -74,9 +78,15 @@ function EventRow({ event }: { event: TrafficEvent }) {
       {expanded && (
         <tr className="traffic-expand">
           <td colSpan={6}>
-            <pre>{formatted}</pre>
-            {event.type !== 'connection' && (
+            {event.sessionId && <div>Session: {event.sessionId}</div>}
+            <div>Target: {event.target || 'not confirmed'}</div>
+            {offline && <div>Payload encoding: {event.payloadEncoding || 'not confirmed'}</div>}
+            {event.payloadEncoding === 'base64' && <div>Binary payload (Base64)</div>}
+            <pre>{offline ? event.payload : formatted}</pre>
+            {!offline && event.type !== 'connection' && (
               <button
+                disabled={!event.replayable || !event.sessionId || event.payloadEncoding === 'base64' || event.type !== 'datagram'}
+                title={!event.replayable || !event.sessionId || event.payloadEncoding === 'base64' || event.type !== 'datagram' ? 'Replay requires a captured text datagram with session identity' : 'Send to Repeater'}
                 className="btn"
                 style={{ margin: '4px 16px 8px', borderColor: 'var(--accent)', color: 'var(--accent)' }}
                 onClick={(e) => {
@@ -125,8 +135,12 @@ function matchesFlag(e: TrafficEvent, filter: FilterKey) {
   return e.flag === filter
 }
 
-export default function TrafficLog() {
-  const events = useStore((s) => s.events)
+export default function TrafficLog({ id = 'panel-traffic', title = 'Traffic log', archivedEvents, onOpenCapture }: {
+  id?: string; title?: string; archivedEvents?: TrafficEvent[]; onOpenCapture?: () => void
+}) {
+  const liveEvents = useStore((s) => s.events)
+  const events = archivedEvents ?? liveEvents
+  const offline = archivedEvents !== undefined
   const bottomRef = useRef<HTMLTableRowElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -142,7 +156,7 @@ export default function TrafficLog() {
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ block: 'nearest' })
     }
-  }, [filtered.length, autoScroll])
+  }, [events, flagFilter, search, autoScroll])
 
   const handleScroll = () => {
     if (!bodyRef.current) return
@@ -151,14 +165,17 @@ export default function TrafficLog() {
   }
 
   return (
-    <div className="panel">
+    <div className="panel traffic-panel" id={id}>
       <div className="panel-header">
-        / TRAFFIC LOG — {filtered.length}
+        <span>{title} — {filtered.length}
         {filtered.length !== events.length && <span style={{ color: 'var(--text-secondary)' }}> / {events.length}</span>} events
+        </span>
+        {onOpenCapture && !offline && <CaptureActions onOpenCapture={onOpenCapture} />}
       </div>
 
       {/* Filter bar: flag pills + payload search. Filtering also cuts render load. */}
       <div
+        className="traffic-filters"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -170,11 +187,12 @@ export default function TrafficLog() {
         }}
       >
         {FILTERS.map((f) => (
-          <button key={f.key} style={pillStyle(flagFilter === f.key)} onClick={() => setFlagFilter(f.key)}>
+          <button key={f.key} aria-pressed={flagFilter === f.key} style={pillStyle(flagFilter === f.key)} onClick={() => setFlagFilter(f.key)}>
             {f.label}
           </button>
         ))}
         <input
+          aria-label="Search traffic payloads"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="search payload (e.g. token, score)…"
@@ -207,7 +225,7 @@ export default function TrafficLog() {
           </thead>
           <tbody>
             {filtered.map((e) => (
-              <EventRow key={e.id} event={e} />
+              <EventRow key={e.id} event={e} offline={offline} />
             ))}
             <tr ref={bottomRef} />
           </tbody>
@@ -222,7 +240,7 @@ export default function TrafficLog() {
               letterSpacing: '0.08em',
             }}
           >
-            NO TRAFFIC INTERCEPTED — START THE PROXY TO BEGIN
+            {offline ? 'NO ARCHIVED EVENTS' : 'NO TRAFFIC INTERCEPTED — START THE PROXY TO BEGIN'}
           </div>
         )}
         {events.length > 0 && filtered.length === 0 && (

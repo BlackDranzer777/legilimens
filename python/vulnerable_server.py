@@ -27,8 +27,9 @@ from aioquic.quic.events import QuicEvent
 
 from logger import log_info, log_error
 from udp_fix import harden_udp_server
+from paths import certs_dir as get_certs_dir
 
-CERTS_DIR = Path(__file__).parent / "certs"
+CERTS_DIR = get_certs_dir()
 
 
 class VulnerableSession:
@@ -158,19 +159,18 @@ class VulnerableServerProtocol(QuicConnectionProtocol):
 
 
 async def start_vulnerable_server(port: int = 4434):
-    certs_dir = Path(__file__).parent / "certs"
-    cert_file = str(certs_dir / "cert.pem")
-    key_file = str(certs_dir / "key.pem")
+    certs_dir = get_certs_dir()
 
     config = QuicConfiguration(
         alpn_protocols=H3_ALPN,
         is_client=False,
         max_datagram_frame_size=65536,
     )
-    config.load_cert_chain(cert_file, key_file)
+    from certs import load_cert_chain
+    load_cert_chain(config, certs_dir)
 
     server = await serve(
-        "0.0.0.0",
+        "127.0.0.1",
         port,
         configuration=config,
         create_protocol=VulnerableServerProtocol,

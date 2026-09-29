@@ -2,3 +2,5 @@
 # Kept separate from python/requirements.txt so the main app stays untouched.
 python-docx>=1.1.0
 matplotlib>=3.8.0
+# Patched image-processing dependency used by matplotlib/document assets.
+Pillow>=12.3.0,<13

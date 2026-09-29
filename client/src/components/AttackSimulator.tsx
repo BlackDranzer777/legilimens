@@ -1,4 +1,6 @@
 import { AttackState, useStore } from '../store/useStore'
+import { useState } from 'react'
+import { Play, Square } from 'lucide-react'
 
 // The 5 server-side QUIC attacks, matching python/attacks/. Params are the per-attack
 // defaults from the API contract. These run on the backend (POST /attack) and report
@@ -6,20 +8,20 @@ import { AttackState, useStore } from '../store/useStore'
 const ATTACKS: { type: string; title: string; desc: string; params: Record<string, unknown> }[] = [
   {
     type: 'flooding',
-    title: '/ QUIC-FLOODING',
+    title: 'QUIC flooding',
     desc: 'Opens 100 parallel QUIC connections, each completing the handshake then dropping. Burns CPU on connection setup.',
     params: { connections: 100 },
   },
   {
     type: 'loris',
-    title: '/ QUIC-LORIS',
+    title: 'QUIC loris',
     desc: 'Repeated cycles of 100 handshake-and-drop connections, 30s apart. Slowloris-style pressure on the QUIC setup path.',
     params: { connections: 100, cycleDelay: 30, cycles: 3 },
   },
   {
     type: 'encapsulation',
-    title: '/ QUIC-ENCAPSULATION',
-    desc: 'Scapy-crafted TCP-in-UDP / UDP-in-UDP / fragmented packets. Requires root — fails with a clear error otherwise.',
+    title: 'QUIC encapsulation',
+    desc: 'Raw TCP-in-UDP, UDP-in-UDP and fragmented packets. Requires Scapy, Npcap on Windows, and elevated privileges. Unavailable in the desktop bundle.',
     params: { packets: 100 },
   },
 ]
@@ -63,14 +65,50 @@ export default function AttackSimulator() {
   const completed = useStore((s) => s.completedAttacks)
   const launch = useStore((s) => s.launchAttack)
   const stop = useStore((s) => s.stopAttack)
+  const [target, setTarget] = useState('https://127.0.0.1:4434')
+  const [pending, setPending] = useState<Record<string, boolean>>({})
+  const [errors, setErrors] = useState<Record<string, string>>({})
+
+  async function stopRun(run: AttackState) {
+    setPending((p) => ({ ...p, [run.attackType]: true }))
+    setErrors((e) => ({ ...e, [run.attackType]: '' }))
+    try {
+      await stop(run.attackId)
+    } catch (error) {
+      setErrors((e) => ({ ...e, [run.attackType]: error instanceof Error ? error.message : 'Could not stop this run.' }))
+    } finally {
+      setPending((p) => ({ ...p, [run.attackType]: false }))
+    }
+  }
+
+  async function execute(attack: typeof ATTACKS[number]) {
+    try {
+      if (new URL(target).protocol !== 'https:') throw new Error()
+    } catch {
+      setErrors((e) => ({ ...e, [attack.type]: 'Enter a valid HTTPS target URL.' }))
+      return
+    }
+    setPending((p) => ({ ...p, [attack.type]: true }))
+    setErrors((e) => ({ ...e, [attack.type]: '' }))
+    try {
+      const id = await launch(attack.type, attack.params, target)
+      if (!id) setErrors((e) => ({ ...e, [attack.type]: 'Could not start this run. Check the backend connection.' }))
+    } finally {
+      setPending((p) => ({ ...p, [attack.type]: false }))
+    }
+  }
 
   const runningOf = (type: string) => Object.values(running).find((a) => a.attackType === type)
   const lastOf = (type: string) => completed.find((a) => a.attackType === type)
 
   return (
-    <div className="panel">
-      <div className="panel-header">/ ATTACK SIMULATOR</div>
-      <div className="panel-body" style={{ display: 'flex', flexDirection: 'column' }}>
+    <div className="panel attacks-panel" id="panel-attacks">
+      <div className="attack-target">
+        <label htmlFor="attack-target">Attack target</label>
+        <input id="attack-target" type="url" className="target-bar__input" value={target} onChange={(e) => { setTarget(e.target.value); setErrors({}) }} />
+        <span className="muted">{Object.keys(running).length} running</span>
+      </div>
+      <div className="panel-body attack-body">
         <div className="attack-grid">
           {ATTACKS.map((a) => {
             const run = runningOf(a.type)
@@ -79,13 +117,16 @@ export default function AttackSimulator() {
               <div className="attack-card" key={a.type}>
                 <div className="attack-card__title">{a.title}</div>
                 <div className="attack-card__desc">{a.desc}</div>
+                <dl className="attack-parameters">
+                  {Object.entries(a.params).map(([key, value]) => <div key={key}><dt>{key === 'cycleDelay' ? 'Cycle delay (s)' : key}</dt><dd>{String(value)}</dd></div>)}
+                </dl>
 
                 {run ? (
                   <>
                     <div className="attack-card__status running">◌ RUNNING…</div>
                     <ProgressBar progress={run.progress} />
-                    <button className="btn btn-danger" style={{ marginTop: 4 }} onClick={() => stop(run.attackId)}>
-                      ■ STOP
+                    <button className="btn btn-danger" style={{ marginTop: 4 }} disabled={pending[a.type]} onClick={() => stopRun(run)}>
+                      <Square size={14} /> {pending[a.type] ? 'Stopping...' : 'Stop'}
                     </button>
                   </>
                 ) : (
@@ -101,23 +142,22 @@ export default function AttackSimulator() {
                       {done?.status === 'stopped' && '■ STOPPED'}
                     </div>
                     {done && <div className="attack-result">{summary(done)}</div>}
-                    <button className="btn btn-primary" style={{ marginTop: 4 }} onClick={() => launch(a.type, a.params)}>
-                      EXECUTE
+                    <button className="btn btn-primary" style={{ marginTop: 4 }} disabled={pending[a.type]} onClick={() => execute(a)} aria-label={`Run ${a.title}`}>
+                      <Play size={14} /> {pending[a.type] ? 'Starting...' : 'Run attack'}
                     </button>
                   </>
                 )}
+                {errors[a.type] && <div className="action-error" role="alert">{errors[a.type]}</div>}
               </div>
             )
           })}
         </div>
 
         {completed.length > 0 && (
-          <div style={{ borderTop: '1px solid var(--border-dim)', padding: '6px 12px', flexShrink: 0, maxHeight: 96, overflowY: 'auto' }}>
-            <div style={{ fontSize: 10, color: 'var(--text-secondary)', letterSpacing: '0.08em', marginBottom: 4 }}>
-              RECENT
-            </div>
+          <div className="attack-history">
+            <h2>Recent runs</h2>
             {completed.slice(0, 8).map((a) => (
-              <div key={a.attackId} style={{ fontSize: 10, color: 'var(--text-secondary)', padding: '1px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div key={a.attackId} className="attack-history-row">
                 <span style={{ color: a.status === 'complete' ? 'var(--accent)' : a.status === 'stopped' ? 'var(--warning)' : 'var(--danger)', fontWeight: 700 }}>
                   {a.status === 'complete' ? '✓' : a.status === 'stopped' ? '■' : '✗'}
                 </span>{' '}
@@ -126,6 +166,7 @@ export default function AttackSimulator() {
             ))}
           </div>
         )}
+        {completed.length === 0 && <div className="attack-history"><h2>Recent runs</h2><p className="muted">No completed runs.</p></div>}
       </div>
     </div>
   )

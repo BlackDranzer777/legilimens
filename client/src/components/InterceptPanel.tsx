@@ -31,6 +31,20 @@ function chipStyle(active: boolean): React.CSSProperties {
 function InterceptItemCard({ item }: { item: InterceptItem }) {
   const resolve = useStore((s) => s.resolveIntercept)
   const [edited, setEdited] = useState(item.payload)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function decide(action: 'forward' | 'drop') {
+    setBusy(true)
+    setError('')
+    try {
+      await resolve(item.interceptId, action, action === 'forward' ? edited : undefined)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Intercept decision failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const label =
     item.messageType === 'stream' && item.streamId
@@ -49,21 +63,24 @@ function InterceptItemCard({ item }: { item: InterceptItem }) {
         <span style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{fmtTime(item.timestamp)}</span>
         <span style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{item.rawSize}B</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          <button className="btn btn-primary" onClick={() => resolve(item.interceptId, 'forward', edited)}>
+          <button className="btn btn-primary" disabled={busy} onClick={() => decide('forward')}>
             ▶ FORWARD
           </button>
-          <button className="btn btn-danger" onClick={() => resolve(item.interceptId, 'drop')}>
+          <button className="btn btn-danger" disabled={busy} onClick={() => decide('drop')}>
             ✕ DROP
           </button>
         </span>
       </div>
       <textarea
+        aria-label={item.payloadEncoding === 'base64' ? 'Binary payload in Base64' : 'Message payload'}
         className="intercept-item__payload"
         value={edited}
         onChange={(e) => setEdited(e.target.value)}
         spellCheck={false}
         rows={2}
       />
+      {item.payloadEncoding === 'base64' && <span>Binary payload (Base64)</span>}
+      {error && <span role="alert">{error}</span>}
     </div>
   )
 }
@@ -73,6 +90,7 @@ function InterceptItemCard({ item }: { item: InterceptItem }) {
 // capture is running, so the hint nudges the user to press START first.
 export default function InterceptPanel() {
   const cfg = useStore((s) => s.manualIntercept)
+  const configError = useStore((s) => s.manualInterceptError)
   const pending = useStore((s) => s.pendingIntercepts)
   const setManual = useStore((s) => s.setManualIntercept)
   const fetchCfg = useStore((s) => s.fetchInterceptConfig)
@@ -137,6 +155,7 @@ export default function InterceptPanel() {
         <input
           className="target-bar__input"
           type="number"
+          aria-label="Intercept timeout in seconds"
           min={1}
           max={300}
           value={Math.round(cfg.timeoutMs / 1000)}
@@ -153,6 +172,7 @@ export default function InterceptPanel() {
         </span>
       </div>
 
+      {configError && <div className="action-error" role="alert">{configError}</div>}
       {pending.length > 0 && (
         <div className="intercept-queue">
           {pending.map((item) => (

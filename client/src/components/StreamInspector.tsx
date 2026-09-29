@@ -13,7 +13,7 @@ function StreamItem({ session }: { session: StreamSession }) {
 
   return (
     <>
-      <div className={`stream-item ${expanded ? 'expanded' : ''}`} onClick={() => setExpanded((v) => !v)}>
+      <button type="button" aria-expanded={expanded} className={`stream-item ${expanded ? 'expanded' : ''}`} onClick={() => setExpanded((v) => !v)}>
         <span style={{ color: 'var(--accent)', fontWeight: 700, marginRight: 8 }}>
           #{session.id}
         </span>
@@ -36,9 +36,10 @@ function StreamItem({ session }: { session: StreamSession }) {
         <span style={{ color: 'var(--text-secondary)', fontSize: 10, float: 'right' }}>
           {session.status === 'closed' ? `duration ${elapsed(session)}` : `open ${elapsed(session)}`}
         </span>
-      </div>
+      </button>
       {expanded && (
         <div className="stream-chunks">
+          {!!session.omittedChunks && <div role="status">{session.omittedChunks} earlier chunks omitted by retention limits.</div>}
           {session.chunks.length === 0 ? (
             <div style={{ color: 'var(--text-secondary)', fontSize: 10 }}>NO CHUNKS YET</div>
           ) : (
@@ -60,7 +61,7 @@ export default function StreamInspector() {
   const sessionList = Object.values(streams).sort((a, b) => b.openedAt - a.openedAt)
 
   return (
-    <div className="panel">
+    <div className="panel" id="panel-streams">
       <div className="panel-header">/ STREAM INSPECTOR — {sessionList.length} streams</div>
       <div className="panel-body">
         {sessionList.length === 0 ? (

@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/security-union/videocall-rs.git",
+  "commit": "31a8b2076e7228f1b846fe4ed75dc70ffc27eb44",
+  "checkout": ".tooling/videocall-rs",
+  "rustToolchain": "1.93.1",
+  "webTransportQuinn": "0.8.1",
+  "serverBinary": "webtransport_server",
+  "platform": "linux",
+  "requiredFiles": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "actix-api/src/bin/webtransport_server.rs",
+    "actix-api/src/webtransport/mod.rs",
+    "actix-api/src/token_validator.rs",
+    "dioxus-ui/scripts/config.js",
+    "nix/rust.nix",
+    "nix/tamal/lock.json"
+  ]
+}

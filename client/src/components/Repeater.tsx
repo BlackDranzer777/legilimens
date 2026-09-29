@@ -1,78 +1,94 @@
+import { useEffect, useState } from 'react'
+import { ArrowLeft, ArrowRight, Braces, Send } from 'lucide-react'
 import { useStore } from '../store/useStore'
+import TrafficLog from './TrafficLog'
+import { apiFetch } from '../control'
 
-function chipStyle(active: boolean): React.CSSProperties {
-  return {
-    fontSize: 10,
-    letterSpacing: '0.06em',
-    padding: '4px 10px',
-    border: `1px solid ${active ? 'var(--accent)' : 'var(--border-dim)'}`,
-    background: active ? 'var(--accent)' : 'transparent',
-    color: active ? '#090909' : 'var(--text-secondary)',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    fontWeight: active ? 700 : 400,
-    textTransform: 'uppercase',
-  }
-}
-
-// Burp-style Repeater: take a captured message, edit it, and resend it on demand into
-// the live proxied session. The target's response comes back in the Traffic Log.
 export default function Repeater() {
   const repeater = useStore((s) => s.repeater)
   const status = useStore((s) => s.repeaterStatus)
   const setRepeater = useStore((s) => s.setRepeater)
   const send = useStore((s) => s.replaySend)
+  const [formatError, setFormatError] = useState('')
+  const activeView = useStore((s) => s.activeView)
+  const [sessions, setSessions] = useState<{ id: string; target: string }[]>([])
+  const [sessionError, setSessionError] = useState('')
+  const sessionIsLive = sessions.some((session) => session.id === repeater.sessionId)
+  const sending = status === 'sending…'
+
+  useEffect(() => {
+    if (activeView !== 'repeater') return
+    let alive = true
+    let busy = false
+    const poll = async () => {
+      if (busy) return
+      busy = true
+      try {
+        const response = await apiFetch('/sessions')
+        const data = await response.json()
+        if (!Array.isArray(data.items)) throw new Error('Invalid session list')
+        if (alive) { setSessions(data.items); setSessionError('') }
+      } catch (error) {
+        if (alive) {
+          setSessions([])
+          setSessionError(error instanceof Error ? error.message : 'Could not load sessions.')
+        }
+      } finally { busy = false }
+    }
+    setSessions([])
+    void poll()
+    const timer = setInterval(poll, 2000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [activeView])
+
+  function format() {
+    try {
+      setRepeater({ payload: JSON.stringify(JSON.parse(repeater.payload), null, 2) })
+      setFormatError('')
+    } catch {
+      setFormatError('Payload is not valid JSON.')
+    }
+  }
 
   return (
-    <div className="panel">
-      <div className="panel-header">/ REPEATER</div>
-      <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 10, color: 'var(--text-secondary)', letterSpacing: '0.06em' }}>SEND</span>
-          <button
-            style={chipStyle(repeater.direction === 'incoming')}
-            onClick={() => setRepeater({ direction: 'incoming' })}
-            title="Inject toward the server, as if the client sent it"
-          >
-            → TO SERVER
-          </button>
-          <button
-            style={chipStyle(repeater.direction === 'outgoing')}
-            onClick={() => setRepeater({ direction: 'outgoing' })}
-            title="Inject toward the client, as if the server sent it"
-          >
-            ← TO CLIENT
-          </button>
+    <div className="repeater-workspace">
+      <div className="panel repeater-editor" id="panel-repeater">
+        <div className="panel-header"><span>Message</span><span className="muted">Datagram</span></div>
+        <div className="repeater-session">
+          <label htmlFor="replay-session">Session</label>
+          <select id="replay-session" value={repeater.sessionId} disabled={sending}
+            onChange={(e) => setRepeater({ sessionId: e.target.value })}>
+            <option value="">Select a live session</option>
+            {repeater.sessionId && !sessionIsLive && <option value={repeater.sessionId} disabled>
+              {repeater.sessionId.slice(0, 8)} (unavailable)
+            </option>}
+            {sessions.map((session) => <option key={session.id} value={session.id}>
+              {session.id.slice(0, 8)} - {session.target}
+            </option>)}
+          </select>
         </div>
-
-        <textarea
-          value={repeater.payload}
-          onChange={(e) => setRepeater({ payload: e.target.value })}
-          spellCheck={false}
-          placeholder="Expand a row in the Traffic Log and click ⟳ Send to Repeater — or paste a payload here."
-          style={{
-            flex: 1,
-            minHeight: 80,
-            resize: 'none',
-            padding: 8,
-            fontSize: 11,
-            fontFamily: 'var(--font-mono)',
-            background: 'var(--bg-primary)',
-            border: '1px solid var(--border-dim)',
-            color: 'var(--text-primary)',
-            outline: 'none',
-          }}
-        />
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button className="btn btn-primary" onClick={send} disabled={!repeater.payload.trim()}>
-            ▶ SEND
+        <div className="repeater-toolbar">
+          <div className="segmented" role="group" aria-label="Message destination">
+            <button aria-pressed={repeater.direction === 'incoming'} onClick={() => setRepeater({ direction: 'incoming' })}>
+              <ArrowRight size={15} /> To server
+            </button>
+            <button aria-pressed={repeater.direction === 'outgoing'} onClick={() => setRepeater({ direction: 'outgoing' })}>
+              <ArrowLeft size={15} /> To client
+            </button>
+          </div>
+          <button className="icon-button" aria-label="Format JSON" title="Format JSON" onClick={format} disabled={!repeater.payload.trim()}><Braces size={18} /></button>
+        </div>
+        <textarea className="repeater-payload" aria-label="Repeater payload" value={repeater.payload}
+          onChange={(e) => { setRepeater({ payload: e.target.value }); setFormatError('') }}
+          spellCheck={false} placeholder="Message payload" />
+        <div className="repeater-footer">
+          <div className="repeater-feedback" role="status">{sessionError || formatError || status || `${new TextEncoder().encode(repeater.payload).length} bytes`}</div>
+          <button className="btn btn-primary" onClick={send} disabled={!sessionIsLive || sending || repeater.messageType !== 'datagram'}>
+            <Send size={15} /> {sending ? 'Sending...' : 'Send'}
           </button>
-          <span style={{ fontSize: 10, color: 'var(--text-secondary)', letterSpacing: '0.06em' }}>
-            {status || 'datagram · needs an active session'}
-          </span>
         </div>
       </div>
+      <TrafficLog id="repeater-traffic" title="Traffic" />
     </div>
   )
 }

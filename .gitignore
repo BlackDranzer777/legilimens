@@ -13,6 +13,8 @@ __pycache__/
 # Build output
 dist/
 build/
+desktop/release/
+*.zip
 
 # Misc
 .DS_Store
@@ -31,3 +33,11 @@ doc/assets/
 
 # NOTE: the top-level assets/ folder (README images) IS committed on purpose — do not ignore it.
 # Regenerate those with assets/generate_assets.py.
+
+# Interop toolchain + Go target (downloaded, never committed)
+.tooling/
+interop/target/webtransport-go/
+interop/**/*.exe
+interop/**/certs/
+interop/**/*.pem
+*.captures.json

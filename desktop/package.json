@@ -1,0 +1,59 @@
+{
+  "name": "legilimens-desktop",
+  "productName": "Legilimens",
+  "version": "1.0.0-preview.1",
+  "description": "Legilimens desktop shell — one-click Windows app (Electron + bundled Python backend)",
+  "main": "main.cjs",
+  "author": "BlackDranzer777",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "test:runtime": "electron tests/runtime-smoke.cjs",
+    "test:packaged": "node tests/packaged-smoke.mjs",
+    "start": "electron .",
+    "dist": "electron-builder --win --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "~44.4.5",
+    "electron-builder": "~26.15.3"
+  },
+  "build": {
+    "appId": "com.hallows.legilimens",
+    "productName": "Legilimens",
+    "directories": {
+      "output": "release/preview",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "process-lifecycle.cjs"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/legilimens-backend",
+        "to": "backend"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Legilimens-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Legilimens"
+    }
+  }
+}

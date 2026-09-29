@@ -1,6 +1,14 @@
 import { create } from 'zustand'
+import { apiFetch, captureUrl, getControlToken, proxyUrl, requireAuthentication } from '../control'
+
+export type WorkspaceView = 'traffic' | 'intercept' | 'repeater' | 'attacks' | 'streams' | 'settings'
 
 export interface TrafficEvent {
+  target?: string
+  sessionId?: string
+  payloadPreview?: string
+  replayable?: boolean
+  payloadEncoding?: 'utf8' | 'base64'
   id: string
   type: 'datagram' | 'stream' | 'connection' | 'attack'
   direction: 'incoming' | 'outgoing'
@@ -13,6 +21,7 @@ export interface TrafficEvent {
 }
 
 export interface RepeaterState {
+  sessionId: string
   payload: string
   direction: 'incoming' | 'outgoing'
   messageType: 'datagram' | 'stream'
@@ -32,6 +41,7 @@ export interface StreamSession {
   openedAt: number
   closedAt?: number
   chunks: StreamChunk[]
+  omittedChunks?: number
 }
 
 export type AttackStatus = 'started' | 'running' | 'complete' | 'failed' | 'stopped'
@@ -48,6 +58,7 @@ export interface AttackState {
 }
 
 export interface InterceptItem {
+  payloadEncoding?: 'utf8' | 'base64'
   interceptId: string
   timestamp: number
   direction: 'incoming' | 'outgoing'
@@ -65,12 +76,20 @@ export interface ManualInterceptConfig {
 }
 
 interface LegilimensStore {
+  tamperEnabled: boolean
+  setTamperEnabled: (enabled: boolean) => void
+  activeView: WorkspaceView
+  setActiveView: (view: WorkspaceView) => void
   isProxyActive: boolean
   connectionStatus: 'idle' | 'connecting' | 'active' | 'error'
   wsConnected: boolean
   events: TrafficEvent[]
+  observationStartedAt: number
   streams: Record<string, StreamSession>
   totalEvents: number
+  evictedEvents: number
+  evictedStreams: number
+  resourceWarning: string
   totalDatagrams: number
   suspiciousCount: number
   tamperedCount: number
@@ -78,6 +97,7 @@ interface LegilimensStore {
   runningAttacks: Record<string, AttackState>
   completedAttacks: AttackState[]
   manualIntercept: ManualInterceptConfig
+  manualInterceptError: string
   pendingIntercepts: InterceptItem[]
   repeater: RepeaterState
   repeaterStatus: string
@@ -109,8 +129,25 @@ interface LegilimensStore {
 }
 
 const MAX_EVENTS = 500
+const MAX_CAPTURE_BYTES = 8 * 1024 * 1024
+const MAX_STREAMS = 64
+const MAX_STREAM_CHUNKS = 128
+const MAX_STREAM_BYTES = 128 * 1024
+// UTF-16 storage estimates bound retained strings, not total browser heap usage.
+const byteSizes = new WeakMap<object, number>()
+const storedBytes = (value: object) => {
+  let bytes = byteSizes.get(value)
+  if (bytes === undefined) {
+    bytes = JSON.stringify(value).length * 2
+    byteSizes.set(value, bytes)
+  }
+  return bytes
+}
+const boundedTokens = (tokens: string[]) => [...new Set(tokens.filter((t) => t.length <= 4096))].slice(-100)
 
 let ws: WebSocket | null = null
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let wantsWebSocket = false
 let wt: WebTransport | null = null
 let datagramWriter: WritableStreamDefaultWriter<Uint8Array> | null = null
 let pingInterval: ReturnType<typeof setInterval> | null = null
@@ -133,18 +170,27 @@ function base64ToUint8Array(b64: string): Uint8Array {
 }
 
 export const useStore = create<LegilimensStore>((set, get) => ({
+  tamperEnabled: false,
+  setTamperEnabled: (tamperEnabled) => set({ tamperEnabled }),
+  activeView: 'traffic',
+  setActiveView: (activeView) => set({ activeView }),
   isProxyActive: false,
   connectionStatus: 'idle',
   wsConnected: false,
   events: [],
+  observationStartedAt: Date.now(),
   streams: {},
   totalEvents: 0,
+  evictedEvents: 0,
+  evictedStreams: 0,
+  resourceWarning: '',
   totalDatagrams: 0,
   suspiciousCount: 0,
   tamperedCount: 0,
   harvestedTokens: [],
   runningAttacks: {},
   completedAttacks: [],
+  manualInterceptError: '',
   manualIntercept: {
     enabled: false,
     directions: ['incoming', 'outgoing'],
@@ -152,7 +198,7 @@ export const useStore = create<LegilimensStore>((set, get) => ({
     timeoutMs: 30000,
   },
   pendingIntercepts: [],
-  repeater: { payload: '', direction: 'incoming', messageType: 'datagram' },
+  repeater: { payload: '', direction: 'incoming', messageType: 'datagram', sessionId: '' },
   repeaterStatus: '',
 
   addEvent: (raw) => {
@@ -163,7 +209,12 @@ export const useStore = create<LegilimensStore>((set, get) => ({
 
     set((state) => {
       const events = [...state.events, event]
-      if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS)
+      let bytes = events.reduce((sum, item) => sum + storedBytes(item), 0)
+      let evictedEvents = state.evictedEvents
+      while (events.length > MAX_EVENTS || bytes > MAX_CAPTURE_BYTES) {
+        bytes -= storedBytes(events.shift()!)
+        evictedEvents++
+      }
 
       // Update stream sessions
       let streams = { ...state.streams }
@@ -190,19 +241,34 @@ export const useStore = create<LegilimensStore>((set, get) => ({
               timestamp: event.timestamp,
             },
           ]
+          let chunkBytes = storedBytes(s.chunks)
+          while (s.chunks.length > MAX_STREAM_CHUNKS || chunkBytes > MAX_STREAM_BYTES) {
+            s.chunks.shift()
+            s.omittedChunks = (s.omittedChunks ?? 0) + 1
+            byteSizes.delete(s.chunks)
+            chunkBytes = storedBytes(s.chunks)
+          }
           streams[sid] = s
         }
+      }
+
+      let evictedStreams = state.evictedStreams
+      while (Object.keys(streams).length > MAX_STREAMS) {
+        delete streams[Object.keys(streams)[0]]
+        evictedStreams++
       }
 
       // Extract tokens from heartbeats
       const newTokens = extractTokens(event.payload)
       const harvestedTokens = newTokens.length
-        ? [...new Set([...state.harvestedTokens, ...newTokens])]
+        ? boundedTokens([...state.harvestedTokens, ...newTokens])
         : state.harvestedTokens
 
       return {
         events,
         streams,
+        evictedEvents,
+        evictedStreams,
         totalEvents: state.totalEvents + 1,
         totalDatagrams: event.type === 'datagram' ? state.totalDatagrams + 1 : state.totalDatagrams,
         suspiciousCount: event.flag === 'suspicious' ? state.suspiciousCount + 1 : state.suspiciousCount,
@@ -218,8 +284,12 @@ export const useStore = create<LegilimensStore>((set, get) => ({
   clearLog: () =>
     set({
       events: [],
+      observationStartedAt: Date.now(),
       streams: {},
       totalEvents: 0,
+      evictedEvents: 0,
+      evictedStreams: 0,
+      resourceWarning: '',
       totalDatagrams: 0,
       suspiciousCount: 0,
       tamperedCount: 0,
@@ -227,20 +297,111 @@ export const useStore = create<LegilimensStore>((set, get) => ({
     }),
 
   addHarvestedToken: (token) =>
-    set((s) => ({ harvestedTokens: [...new Set([...s.harvestedTokens, token])] })),
+    set((s) => ({ harvestedTokens: boundedTokens([...s.harvestedTokens, token]) })),
 
   connectWebSocket: () => {
+    wantsWebSocket = true
     if (ws && ws.readyState < 2) return
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
 
-    ws = new WebSocket('ws://localhost:4435')
-
-    ws.onopen = () => {
-      set({ wsConnected: true })
+    const socket = new WebSocket(captureUrl())
+    ws = socket
+    let epoch: string | null = null
+    let sequence = 0
+    let recovering = false
+    let buffered: string[] = []
+    let bufferedBytes = 0
+    const recover = async () => {
+      if (recovering) return
+      recovering = true
+      set({ wsConnected: false })
+      try {
+        const response = await apiFetch('/state')
+        const snapshot = await response.json()
+        if (ws !== socket) return
+        if (snapshot.epoch !== epoch || !Number.isSafeInteger(snapshot.sequence)
+            || !Array.isArray(snapshot.attacks) || !Array.isArray(snapshot.pendingIntercepts)) {
+          throw new Error('Invalid recovery snapshot')
+        }
+        const runningAttacks: Record<string, AttackState> = {}
+        const completedAttacks: AttackState[] = []
+        for (const attack of snapshot.attacks as AttackState[]) {
+          if (['stopped', 'complete', 'failed'].includes(attack.status)) completedAttacks.push(attack)
+          else runningAttacks[attack.attackId] = attack
+        }
+        sequence = snapshot.sequence
+        set({ runningAttacks, completedAttacks: completedAttacks.slice(0, 20),
+          pendingIntercepts: snapshot.pendingIntercepts, manualIntercept: snapshot.manualIntercept,
+          tamperEnabled: !!snapshot.tamperEnabled, isProxyActive: snapshot.captureMode === 'capturing',
+          connectionStatus: snapshot.captureMode === 'capturing' ? 'active' : 'idle', wsConnected: true })
+        const queued = buffered
+        buffered = []
+        bufferedBytes = 0
+        recovering = false
+        for (const data of queued) {
+          const packet = JSON.parse(data)
+          if (packet.sequence <= sequence && ['datagram', 'stream', 'connection'].includes(packet.event?.type)) {
+            set({ resourceWarning: 'State recovered; traffic during the capture gap may be missing.' })
+          }
+          socket.onmessage?.({ data } as MessageEvent)
+        }
+      } catch {
+        if (ws === socket) {
+          set({ resourceWarning: 'State recovery failed. Capture is incomplete; reconnecting.' })
+          socket.close()
+        }
+      }
     }
 
-    ws.onmessage = (msg) => {
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ type: 'authenticate', token: getControlToken() }))
+    }
+
+    socket.onmessage = (msg) => {
+      if (ws !== socket) return
       try {
-        const event = JSON.parse(msg.data)
+        const packet = JSON.parse(msg.data)
+        if (packet.type === 'authenticated') {
+          if (typeof packet.epoch === 'string') {
+            epoch = packet.epoch
+            void recover()
+          } else set({ wsConnected: true })
+          return
+        }
+        if (typeof packet.sequence === 'number') {
+          if (packet.epoch !== epoch) {
+            set({ resourceWarning: 'Backend changed. Capture is incomplete; reconnecting.' })
+            socket.close()
+            return
+          }
+          if (recovering) {
+            if (buffered.length >= 128 || bufferedBytes + msg.data.length * 2 > 4 * 1024 * 1024) {
+              set({ resourceWarning: 'Recovery buffer exceeded. Capture is incomplete; reconnecting.' })
+              socket.close()
+              return
+            }
+            buffered.push(msg.data)
+            bufferedBytes += msg.data.length * 2
+            return
+          }
+          if (packet.sequence <= sequence) return
+          if (packet.sequence !== sequence + 1) {
+            set({ resourceWarning: 'Capture sequence gap detected. Recovering current state; missed traffic is unavailable.' })
+            void recover()
+            return
+          }
+          sequence = packet.sequence
+        }
+        const event = packet.event ?? packet
+        if (event.type === 'resource') {
+          set({ resourceWarning: String(event.message).slice(0, 300) })
+          if (epoch) void recover()
+          return
+        }
+        if (event.type === 'authenticated') {
+          set({ wsConnected: true })
+          return
+        }
         // Attack progress/terminal events share this WS channel — route them separately.
         if (event.type === 'attack') {
           get().handleAttackEvent(event)
@@ -258,19 +419,34 @@ export const useStore = create<LegilimensStore>((set, get) => ({
       }
     }
 
-    ws.onclose = () => {
+    socket.onclose = (event) => {
+      if (ws !== socket) return
       set({ wsConnected: false })
+      if (epoch && wantsWebSocket) {
+        set({ resourceWarning: 'Capture gap detected; missed traffic is unavailable.' })
+      }
+      if (event.code === 1013) {
+        set({ resourceWarning: 'Capture capacity exceeded or subscriber too slow. Capture is incomplete.' })
+      }
       ws = null
-      setTimeout(() => get().connectWebSocket(), 2500)
+      if (event.code === 1008) {
+        wantsWebSocket = false
+        requireAuthentication()
+      } else if (wantsWebSocket) {
+        reconnectTimer = setTimeout(() => get().connectWebSocket(), 2500)
+      }
     }
 
-    ws.onerror = () => ws?.close()
+    socket.onerror = () => socket.close()
   },
 
   disconnectWebSocket: () => {
-    ws?.close()
+    wantsWebSocket = false
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+    const socket = ws
     ws = null
-    set({ wsConnected: false })
+    socket?.close()
+    set({ wsConnected: false, resourceWarning: get().resourceWarning || 'Capture subscription disconnected; traffic outside the subscription is unavailable.' })
   },
 
   // START = tell the proxy to begin capturing (reliable HTTP toggle), then best-effort
@@ -281,7 +457,7 @@ export const useStore = create<LegilimensStore>((set, get) => ({
 
     // 1) Reliable: tell the proxy to start relaying + logging.
     try {
-      await fetch('http://localhost:4436/intercept', {
+      await apiFetch('/intercept', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'start' }),
@@ -308,13 +484,13 @@ export const useStore = create<LegilimensStore>((set, get) => ({
     //    Time-boxed so a flaky handshake can never freeze the UI in "connecting".
     if (!('WebTransport' in window)) return
     try {
-      const res = await fetch('http://localhost:4436/cert-hash')
+      const res = await apiFetch('/cert-hash')
       const { hash } = await res.json()
       const hashBytes = base64ToUint8Array(hash)
 
       // Use 127.0.0.1, NOT localhost: Chromium resolves "localhost" to IPv6 ::1 first,
       // but the proxy's QUIC socket only listens on IPv4.
-      const candidate = new WebTransport('https://127.0.0.1:4433/', {
+      const candidate = new WebTransport(proxyUrl(), {
         serverCertificateHashes: [{ algorithm: 'sha-256', value: hashBytes as BufferSource }],
       })
       await Promise.race([
@@ -358,7 +534,7 @@ export const useStore = create<LegilimensStore>((set, get) => ({
   // STOP = PAUSE: hold the wire. The proxy stops relaying + logging, but the target
   // stays connected, so resuming (START) continues instantly with no reconnect.
   stopWebTransport: () => {
-    fetch('http://localhost:4436/intercept', {
+    apiFetch('/intercept', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'pause' }),
@@ -376,7 +552,7 @@ export const useStore = create<LegilimensStore>((set, get) => ({
   // loses its connection entirely and must redial on its own. Use before switching to a
   // different app via the UPSTREAM TARGET bar.
   disconnectProxy: () => {
-    fetch('http://localhost:4436/intercept', {
+    apiFetch('/intercept', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'disconnect' }),
@@ -427,14 +603,14 @@ export const useStore = create<LegilimensStore>((set, get) => ({
   // Progress + completion arrive asynchronously over the WebSocket as type:"attack".
   launchAttack: async (type, params, target = 'https://127.0.0.1:4434') => {
     try {
-      const res = await fetch('http://localhost:4436/attack', {
+      const res = await apiFetch('/attack', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, target, params }),
       })
       const data = await res.json()
       if (!res.ok || !data?.attackId) return null
-      set((s) => ({
+      set((s) => s.runningAttacks[data.attackId] || s.completedAttacks.some((a) => a.attackId === data.attackId) ? s : ({
         runningAttacks: {
           ...s.runningAttacks,
           [data.attackId]: {
@@ -452,11 +628,12 @@ export const useStore = create<LegilimensStore>((set, get) => ({
   },
 
   stopAttack: async (attackId) => {
-    try {
-      await fetch(`http://localhost:4436/attack/${attackId}/stop`, { method: 'POST' })
-    } catch {
-      // proxy unreachable — the WS will eventually reflect terminal state anyway
+    const res = await apiFetch(`/attack/${attackId}/stop`, { method: 'POST' })
+    const data = await res.json()
+    if (data.attackId !== attackId || !['stopped', 'complete', 'failed'].includes(data.status)) {
+      throw new Error('Stop was not confirmed. Check the run status before retrying.')
     }
+    get().handleAttackEvent({ ...data, attackType: data.type })
   },
 
   // Fold a WS attack event into runningAttacks; move terminal ones to completedAttacks.
@@ -464,6 +641,8 @@ export const useStore = create<LegilimensStore>((set, get) => ({
     const { attackId, attackType, status, progress, result, error } = event
     if (!attackId || !status) return
     set((s) => {
+      // HTTP acknowledgements and delayed WS events must not resurrect a terminal run.
+      if (s.completedAttacks.some((a) => a.attackId === attackId)) return s
       const prev = s.runningAttacks[attackId]
       const merged: AttackState = {
         attackId,
@@ -502,6 +681,7 @@ export const useStore = create<LegilimensStore>((set, get) => ({
           direction: (event.direction as InterceptItem['direction']) ?? 'incoming',
           messageType: (event.messageType as InterceptItem['messageType']) ?? 'datagram',
           payload: (event.payload as string) ?? '',
+          payloadEncoding: event.payloadEncoding === 'base64' ? 'base64' : 'utf8',
           rawSize: (event.rawSize as number) ?? 0,
           streamId: event.streamId as string | undefined,
         }
@@ -516,7 +696,7 @@ export const useStore = create<LegilimensStore>((set, get) => ({
 
   fetchInterceptConfig: async () => {
     try {
-      const res = await fetch('http://localhost:4436/intercept/manual')
+      const res = await apiFetch('/intercept/manual')
       const cfg = await res.json()
       set({
         manualIntercept: {
@@ -533,16 +713,12 @@ export const useStore = create<LegilimensStore>((set, get) => ({
 
   setManualIntercept: async (partial) => {
     const next = { ...get().manualIntercept, ...partial }
+    set({ manualInterceptError: '' })
     try {
-      const res = await fetch('http://localhost:4436/intercept/manual', {
+      const res = await apiFetch('/intercept/manual', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          enabled: next.enabled,
-          directions: next.directions,
-          types: next.types,
-          timeoutMs: next.timeoutMs,
-        }),
+        body: JSON.stringify(partial),
       })
       const cfg = await res.json()
       set({
@@ -555,14 +731,14 @@ export const useStore = create<LegilimensStore>((set, get) => ({
       })
       // Disabling intercept auto-forwards everything still held — clear the local queue.
       if (!cfg.enabled) set({ pendingIntercepts: [] })
-    } catch {
-      // proxy unreachable — leave config as-is
+    } catch (error) {
+      set({ manualInterceptError: error instanceof Error ? error.message : 'Could not update intercept settings.' })
     }
   },
 
   fetchInterceptQueue: async () => {
     try {
-      const res = await fetch('http://localhost:4436/intercept/queue')
+      const res = await apiFetch('/intercept/queue')
       const data = await res.json()
       const items: InterceptItem[] = (data.items ?? []).map((it: Record<string, unknown>) => ({
         interceptId: it.id as string,
@@ -570,6 +746,7 @@ export const useStore = create<LegilimensStore>((set, get) => ({
         direction: (it.direction as InterceptItem['direction']) ?? 'incoming',
         messageType: (it.messageType as InterceptItem['messageType']) ?? 'datagram',
         payload: (it.payload as string) ?? '',
+        payloadEncoding: it.payloadEncoding === 'base64' ? 'base64' : 'utf8',
         rawSize: (it.rawSize as number) ?? 0,
         streamId: it.streamId as string | undefined,
       }))
@@ -580,26 +757,29 @@ export const useStore = create<LegilimensStore>((set, get) => ({
   },
 
   resolveIntercept: async (interceptId, action, payload) => {
-    // Optimistically drop it from the queue; the terminal WS event will also remove it.
+    const res = await apiFetch(`/intercept/${interceptId}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(action === 'forward' ? { action, payload } : { action }),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}))
+      throw new Error(typeof error.detail === 'string' ? error.detail : 'Intercept decision failed')
+    }
     set((s) => ({
       pendingIntercepts: s.pendingIntercepts.filter((p) => p.interceptId !== interceptId),
     }))
-    try {
-      await fetch(`http://localhost:4436/intercept/${interceptId}/decision`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(action === 'forward' ? { action, payload } : { action }),
-      })
-    } catch {
-      // proxy unreachable — the held coroutine will auto-forward on timeout
-    }
   },
 
   // Seed the Repeater from a captured event so it can be edited and resent.
   sendToRepeater: (event) => {
-    const messageType = event.type === 'stream' ? 'stream' : 'datagram'
+    if (!event.replayable || !event.sessionId || event.payloadEncoding === 'base64' || event.type !== 'datagram') {
+      set({ repeaterStatus: 'This event cannot be replayed as a text datagram.' })
+      return
+    }
     set({
-      repeater: { payload: event.payload, direction: event.direction, messageType },
+      activeView: 'repeater',
+      repeater: { payload: event.payload, direction: event.direction, messageType: 'datagram', sessionId: event.sessionId },
       repeaterStatus: '',
     })
   },
@@ -608,26 +788,30 @@ export const useStore = create<LegilimensStore>((set, get) => ({
     set((s) => ({ repeater: { ...s.repeater, ...partial }, repeaterStatus: '' })),
 
   replaySend: async () => {
-    const { payload, direction, messageType } = get().repeater
-    if (!payload.trim()) {
-      set({ repeaterStatus: 'nothing to send' })
+    const { payload, direction, messageType, sessionId } = get().repeater
+    if (!sessionId) {
+      set({ repeaterStatus: 'Select a live session before sending.' })
+      return
+    }
+    if (messageType !== 'datagram') {
+      set({ repeaterStatus: 'Only text datagram replay is supported.' })
       return
     }
     set({ repeaterStatus: 'sending…' })
     try {
-      const res = await fetch('http://localhost:4436/replay', {
+      const res = await apiFetch('/replay', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payload, direction, messageType }),
+        body: JSON.stringify({ payload, direction, messageType, sessionId }),
       })
       if (res.ok) {
-        set({ repeaterStatus: 'sent — watch the log for the response' })
+        set({ repeaterStatus: `Queued to ${sessionId.slice(0, 8)}; delivery is not acknowledged.` })
       } else {
         const err = await res.json().catch(() => ({}))
         set({ repeaterStatus: err?.detail || `failed (${res.status})` })
       }
-    } catch {
-      set({ repeaterStatus: 'failed — is the proxy running?' })
+    } catch (error) {
+      set({ repeaterStatus: error instanceof Error ? error.message : 'Replay failed.' })
     }
   },
 }))

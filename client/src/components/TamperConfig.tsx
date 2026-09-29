@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
+import { useStore } from '../store/useStore'
 
-const API = 'http://localhost:4436'
+import { apiFetch } from '../control'
 
 // Rewrites a named JSON field on every datagram/stream chunk passing through the proxy.
 // The headline demo: field "score" → value "99999" proves QuaffleArena's server trusts
@@ -10,12 +11,13 @@ export default function TamperConfig() {
   const [value, setValue] = useState('99999')
   const [matchField, setMatchField] = useState('')
   const [matchValue, setMatchValue] = useState('')
-  const [enabled, setEnabled] = useState(false)
+  const enabled = useStore((s) => s.tamperEnabled)
+  const setEnabled = useStore((s) => s.setTamperEnabled)
   const [message, setMessage] = useState('')
 
   // Load the proxy's current tamper rule on mount.
   useEffect(() => {
-    fetch(`${API}/tamper`)
+    apiFetch('/tamper')
       .then((r) => r.json())
       .then((t) => {
         if (typeof t?.field === 'string') setField(t.field)
@@ -29,7 +31,7 @@ export default function TamperConfig() {
 
   async function send(nextEnabled: boolean) {
     try {
-      const res = await fetch(`${API}/tamper`, {
+      const res = await apiFetch('/tamper', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -56,6 +58,7 @@ export default function TamperConfig() {
       <input
         className="target-bar__input"
         value={field}
+        aria-label="Field to replace"
         onChange={(e) => setField(e.target.value)}
         placeholder="field (e.g. score)"
         spellCheck={false}
@@ -67,6 +70,7 @@ export default function TamperConfig() {
       <input
         className="target-bar__input"
         value={value}
+        aria-label="Replacement value"
         onChange={(e) => setValue(e.target.value)}
         placeholder="value (e.g. 99999)"
         spellCheck={false}
@@ -78,6 +82,7 @@ export default function TamperConfig() {
       <input
         className="target-bar__input"
         value={matchField}
+        aria-label="Matching field"
         onChange={(e) => setMatchField(e.target.value)}
         placeholder="field (e.g. playerName)"
         spellCheck={false}
@@ -89,6 +94,7 @@ export default function TamperConfig() {
       <input
         className="target-bar__input"
         value={matchValue}
+        aria-label="Matching value"
         onChange={(e) => setMatchValue(e.target.value)}
         placeholder="(blank = all)"
         spellCheck={false}

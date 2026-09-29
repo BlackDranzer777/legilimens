@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
-const API = 'http://localhost:4436'
+import { apiFetch } from '../control'
+import { useStore } from '../store/useStore'
 
 // Surfaces backend state the rest of the UI never showed:
 //  • live capture mode + active MITM session count (GET /intercept, server truth)
@@ -8,26 +9,32 @@ const API = 'http://localhost:4436'
 //    into a real client's serverCertificateHashes
 //  • whether the proxy control API is reachable at all
 export default function ServerInfoBar() {
+  const wsConnected = useStore((s) => s.wsConnected)
   const [certHash, setCertHash] = useState('')
   const [mode, setMode] = useState('—')
   const [sessions, setSessions] = useState<number | null>(null)
   const [online, setOnline] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  // Cert hash is stable for the cert's lifetime — fetch once.
+  // Renewal replaces the backend's certificate without reloading the dashboard.
   useEffect(() => {
-    fetch(`${API}/cert-hash`)
+    let alive = true
+    setCertHash('')
+    setCopied(false)
+    if (!wsConnected) return
+    apiFetch('/cert-hash')
       .then((r) => r.json())
-      .then((d) => { if (typeof d?.hash === 'string') setCertHash(d.hash) })
+      .then((d) => { if (alive && typeof d?.hash === 'string') setCertHash(d.hash) })
       .catch(() => {/* proxy not up yet */})
-  }, [])
+    return () => { alive = false }
+  }, [wsConnected])
 
   // Poll live server status every 2s (server-truth, not the UI's local guess).
   useEffect(() => {
     let alive = true
     const poll = async () => {
       try {
-        const r = await fetch(`${API}/intercept`)
+        const r = await apiFetch('/intercept')
         const d = await r.json()
         if (!alive) return
         setMode(typeof d?.captureMode === 'string' ? d.captureMode : '—')
@@ -75,6 +82,7 @@ export default function ServerInfoBar() {
       <input
         className="target-bar__input"
         value={certHash}
+        aria-label="Proxy certificate hash"
         readOnly
         spellCheck={false}
         placeholder="(proxy offline)"

@@ -20,6 +20,9 @@ export default function StatusBar() {
     streams,
     tamperedCount,
     suspiciousCount,
+    evictedEvents,
+    evictedStreams,
+    resourceWarning,
   } = useStore((s) => s)
 
   const streamCount = Object.keys(streams).length
@@ -33,6 +36,8 @@ export default function StatusBar() {
       <Item label="STREAMS" value={streamCount} />
       <Item label="TAMPERED" value={tamperedCount} warn={tamperedCount > 0} />
       <Item label="SUSPICIOUS" value={suspiciousCount} danger={suspiciousCount > 0} />
+      {(evictedEvents > 0 || evictedStreams > 0) && <span className="resource-warning" role="status">Evicted: {evictedEvents} events, {evictedStreams} streams</span>}
+      {resourceWarning && <span role="alert" className="resource-warning">{resourceWarning}</span>}
     </div>
   )
 }

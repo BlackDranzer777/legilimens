@@ -1,4 +1,5 @@
 import { useStore } from '../store/useStore'
+import { Pause, Play, Trash2, Unplug } from 'lucide-react'
 
 export default function Header() {
   const status = useStore((s) => s.connectionStatus)
@@ -24,8 +25,8 @@ export default function Header() {
   return (
     <header className="site-header">
       <div className="site-header__left">
-        <span className="site-header__title">LEGILIMENS</span>
-        <span className="site-header__tagline">"Reading what others cannot see."</span>
+        <span className="site-header__title">Legili<b>mens</b></span>
+        <span className="site-header__tagline">Reading what others cannot see.</span>
       </div>
 
       <div className="site-header__right">
@@ -49,19 +50,19 @@ export default function Header() {
           onClick={start}
           disabled={isActive || status === 'connecting'}
         >
-          ▶ START
+          <Play size={14} /> Start
         </button>
 
         <button className="btn btn-danger" onClick={stop} disabled={!isActive && status !== 'connecting'}>
-          ❚❚ PAUSE
+          <Pause size={14} /> Pause
         </button>
 
         <button className="btn btn-danger" onClick={disconnect} title="Hard-cut all sessions — the target must redial">
-          ✕ DISCONNECT
+          <Unplug size={14} /> Disconnect
         </button>
 
-        <button className="btn" onClick={clear} style={{ borderColor: 'var(--border-dim)' }}>
-          CLR
+        <button className="icon-button" onClick={clear} aria-label="Clear traffic log" title="Clear traffic log">
+          <Trash2 size={16} />
         </button>
       </div>
     </header>

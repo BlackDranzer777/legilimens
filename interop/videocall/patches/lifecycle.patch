@@ -1,0 +1,324 @@
+diff --git a/videocall-transport/src/webtransport.rs b/videocall-transport/src/webtransport.rs
+--- a/videocall-transport/src/webtransport.rs
++++ b/videocall-transport/src/webtransport.rs
+@@ -6,14 +6,14 @@
+ 
+ use anyhow::{anyhow, Error};
+ use futures::channel::oneshot::channel;
++use std::{cell::Cell, fmt, rc::Rc};
+-use std::{fmt, rc::Rc};
+ use thiserror::Error as ThisError;
+ use videocall_types::Callback;
+ use wasm_bindgen_futures::JsFuture;
+ 
+ use gloo_console::log;
++use js_sys::{Boolean, JsString, Reflect, Uint8Array};
++use wasm_bindgen::{JsCast, JsValue};
+-use js_sys::{Boolean, JsString, Promise, Reflect, Uint8Array};
+-use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
+ use web_sys::{
+     ReadableStream, ReadableStreamDefaultReader, WebTransport, WebTransportBidirectionalStream,
+     WebTransportCloseInfo, WebTransportDatagramDuplexStream, WebTransportReceiveStream,
+@@ -62,40 +62,13 @@
+ #[must_use = "the connection will be closed when the task is dropped"]
+ pub struct WebTransportTask {
+     pub transport: Rc<WebTransport>,
++    // Futures retain promise callbacks until settlement; task drop cancels notifications.
++    alive: Rc<Cell<bool>>,
+-    #[allow(dead_code)]
+-    notification: Callback<WebTransportStatus>,
+-    #[allow(dead_code)]
+-    listeners: [Promise; 2],
+-    /// Stored so the closures live as long as the task and are properly dropped
+-    /// instead of being leaked via `forget()`. The closed closure is wrapped in
+-    /// `Rc` because it is shared across multiple promise chains (`ready.catch`,
+-    /// `closed.then`, `closed.catch`).
+-    #[allow(dead_code)]
+-    opened_closure: Closure<dyn FnMut(JsValue)>,
+-    #[allow(dead_code)]
+-    closed_closure: Rc<Closure<dyn FnMut(JsValue)>>,
+ }
+ 
+-impl WebTransportTask {
+-    fn new(
+-        transport: Rc<WebTransport>,
+-        notification: Callback<WebTransportStatus>,
+-        listeners: [Promise; 2],
+-        opened_closure: Closure<dyn FnMut(JsValue)>,
+-        closed_closure: Rc<Closure<dyn FnMut(JsValue)>>,
+-    ) -> WebTransportTask {
+-        WebTransportTask {
+-            transport,
+-            notification,
+-            listeners,
+-            opened_closure,
+-            closed_closure,
+-        }
+-    }
+-}
+-
+ impl Drop for WebTransportTask {
+     fn drop(&mut self) {
++        self.alive.set(false);
+         // Close the underlying WebTransport session. This causes the reader
+         // loops (datagrams, unidirectional streams, bidirectional streams) to
+         // break out of their `reader.read()` await — the futures resolve with
+@@ -125,8 +98,7 @@
+         on_bidirectional_stream: Callback<WebTransportBidirectionalStream>,
+         notification: Callback<WebTransportStatus>,
+     ) -> Result<WebTransportTask, WebTransportError> {
++        let (transport, alive) = Self::connect_common(url, &notification)?;
+-        let ConnectCommon(transport, listeners, opened_closure, closed_closure) =
+-            Self::connect_common(url, &notification)?;
+         let transport = Rc::new(transport);
+ 
+         Self::start_listening_incoming_datagrams(
+@@ -146,13 +118,7 @@
+             on_bidirectional_stream,
+         );
+ 
++        Ok(WebTransportTask { transport, alive })
+-        Ok(WebTransportTask::new(
+-            transport,
+-            notification,
+-            listeners,
+-            opened_closure,
+-            closed_closure,
+-        ))
+     }
+ 
+     fn start_listening_incoming_unidirectional_streams(
+@@ -293,53 +259,39 @@
+     fn connect_common(
+         url: &str,
+         notification: &Callback<WebTransportStatus>,
++    ) -> Result<(WebTransport, Rc<Cell<bool>>), WebTransportError> {
++        let transport = WebTransport::new(url).map_err(|e| {
+-    ) -> Result<ConnectCommon, WebTransportError> {
+-        let transport = WebTransport::new(url);
+-        let transport = transport.map_err(|e| {
+             WebTransportError::CreationError(format!("Failed to create WebTransport: {e:?}"))
+         })?;
++        let alive = Rc::new(Cell::new(true));
++        let notified_closed = Rc::new(Cell::new(false));
++        let ready = JsFuture::from(transport.ready());
++        let closed = JsFuture::from(transport.closed());
+ 
++        let active = alive.clone();
++        let terminal = notified_closed.clone();
+         let notify = notification.clone();
++        wasm_bindgen_futures::spawn_local(async move {
++            let result = ready.await;
++            if !active.get() { return; }
++            match result {
++                Ok(_) if !terminal.get() => notify.emit(WebTransportStatus::Opened),
++                Err(e) if !terminal.replace(true) => notify.emit(WebTransportStatus::Closed(e)),
++                _ => {}
++            }
++        });
++        let active = alive.clone();
+-
+-        // Both closures are stored in the WebTransportTask struct so they are
+-        // dropped when the task is dropped, instead of being leaked via
+-        // `forget()`. Previously, every reconnection/re-election cycle would
+-        // permanently leak two closures into WASM linear memory.
+-        let opened_closure = Closure::wrap(Box::new(move |_: JsValue| {
+-            notify.emit(WebTransportStatus::Opened);
+-        }) as Box<dyn FnMut(JsValue)>);
+         let notify = notification.clone();
++        wasm_bindgen_futures::spawn_local(async move {
++            let result = closed.await;
++            if active.get() && !notified_closed.replace(true) {
++                let value = match result { Ok(value) | Err(value) => value };
++                notify.emit(WebTransportStatus::Closed(value));
++            }
++        });
++        Ok((transport, alive))
+-        // `closed_closure` is shared via `Rc` because it is referenced by
+-        // multiple promise chains (`ready.catch`, `closed.then`, `closed.catch`).
+-        let closed_closure = Rc::new(Closure::wrap(Box::new(move |e: JsValue| {
+-            notify.emit(WebTransportStatus::Closed(e));
+-        }) as Box<dyn FnMut(JsValue)>));
+-        let ready = transport
+-            .ready()
+-            .then(&opened_closure)
+-            .catch(&closed_closure);
+-        let closed = transport
+-            .closed()
+-            .then(&closed_closure)
+-            .catch(&closed_closure);
+-
+-        {
+-            let listeners = [ready, closed];
+-            Ok(ConnectCommon(
+-                transport,
+-                listeners,
+-                opened_closure,
+-                closed_closure,
+-            ))
+-        }
+     }
+ }
+-struct ConnectCommon(
+-    WebTransport,
+-    [Promise; 2],
+-    Closure<dyn FnMut(JsValue)>,
+-    Rc<Closure<dyn FnMut(JsValue)>>,
+-);
+ 
+ pub fn process_binary(bytes: &Uint8Array, callback: &Callback<Vec<u8>>) {
+     let data = bytes.to_vec();
+diff --git a/dioxus-ui/src/components/waiting_room.rs b/dioxus-ui/src/components/waiting_room.rs
+--- a/dioxus-ui/src/components/waiting_room.rs
++++ b/dioxus-ui/src/components/waiting_room.rs
+@@ -36,6 +36,12 @@
+     on_cancel: EventHandler<()>,
+ ) -> Element {
+     let mut error = use_signal(|| None::<String>);
++    // Requests/election callbacks may finish after admission unmounts this component.
++    let alive = use_hook(|| Rc::new(Cell::new(true)));
++    {
++        let alive = alive.clone();
++        use_drop(move || alive.set(false));
++    }
+ 
+     // Track whether the observer WebSocket is currently connected.
+     // Uses Rc<Cell<bool>> instead of Signal because VcCallback::from()
+@@ -51,6 +57,7 @@
+         let meeting_id = meeting_id.clone();
+         let user_id = user_id.clone();
+         let observer_connected = observer_connected.clone();
++        let alive = alive.clone();
+         use_effect(move || {
+             if observer_token.is_empty() {
+                 log::warn!("WaitingRoom: no observer token, push notifications unavailable; polling fallback will activate");
+@@ -75,6 +82,9 @@
+             let meeting_id_for_post_connect = meeting_id.clone();
+             let obs_conn_on_connect = observer_connected.clone();
+             let obs_conn_on_lost = observer_connected.clone();
++            let alive_on_connect = alive.clone();
++            let alive_on_admitted = alive.clone();
++            let alive_on_rejected = alive.clone();
+ 
+             let opts = VideoCallClientOptions {
+                 user_id: user_id.clone(),
+@@ -90,17 +100,21 @@
+                     // This catches admissions that occurred during the WebSocket
+                     // handshake window (NATS event already published but observer
+                     // wasn't subscribed yet).
++                    if !alive_on_connect.get() { return; }
+                     let mid = meeting_id_for_post_connect.clone();
++                    let alive = alive_on_connect.clone();
+                     wasm_bindgen_futures::spawn_local(async move {
++                        let result = check_status(&mid).await;
++                        if !alive.get() { return; }
++                        match result {
+-                        match check_status(&mid).await {
+                             Ok(status) => match status.status.as_str() {
+                                 "admitted" if status.room_token.is_some() => {
+                                     log::info!("Post-connect poll: participant already admitted");
++                                    if alive.replace(false) { on_admitted.call(status); }
+-                                    on_admitted.call(status);
+                                 }
+                                 "rejected" => {
+                                     log::info!("Post-connect poll: participant rejected");
++                                    if alive.replace(false) { on_rejected.call(()); }
+-                                    on_rejected.call(());
+                                 }
+                                 other => {
+                                     log::debug!(
+@@ -137,16 +151,20 @@
+                 on_meeting_activated: None,
+                 on_participant_admitted: Some(VcCallback::from(move |_: ()| {
+                     log::info!("Participant admitted push received, fetching room token via HTTP");
++                    if !alive_on_admitted.get() { return; }
+                     let mid = meeting_id_for_fetch.clone();
++                    let alive = alive_on_admitted.clone();
+                     // Use spawn_local instead of dioxus::spawn because
+                     // this callback fires from a WebSocket message
+                     // handler which runs outside any Dioxus runtime
+                     // context. Calling dioxus::spawn() here would panic.
+                     wasm_bindgen_futures::spawn_local(async move {
++                        let result = check_status(&mid).await;
++                        if !alive.get() { return; }
++                        match result {
+-                        match check_status(&mid).await {
+                             Ok(status) => {
+                                 if status.room_token.is_some() {
++                                    if alive.replace(false) { on_admitted.call(status); }
+-                                    on_admitted.call(status);
+                                 } else {
+                                     log::error!("Admitted but check_status returned no room_token");
+                                     error.set(Some(
+@@ -163,7 +181,7 @@
+                 })),
+                 on_participant_rejected: Some(VcCallback::from(move |_| {
+                     log::info!("Participant rejected push received");
++                    if alive_on_rejected.replace(false) { on_rejected.call(()); }
+-                    on_rejected.call(());
+                 })),
+                 on_waiting_room_updated: None,
+                 on_speaking_changed: None,
+@@ -196,6 +214,7 @@
+     {
+         let meeting_id = meeting_id.clone();
+         let poll_interval_id = poll_interval_id.clone();
++        let alive = alive.clone();
+         use_effect(move || {
+             let window = match web_sys::window() {
+                 Some(w) => w,
+@@ -211,16 +230,19 @@
+             // during the join -> connect gap).
+             {
+                 let meeting_id = meeting_id.clone();
++                let alive = alive.clone();
+                 wasm_bindgen_futures::spawn_local(async move {
++                    let result = check_status(&meeting_id).await;
++                    if !alive.get() { return; }
++                    match result {
+-                    match check_status(&meeting_id).await {
+                         Ok(status) => match status.status.as_str() {
+                             "admitted" if status.room_token.is_some() => {
+                                 log::info!("Immediate mount poll: participant already admitted");
++                                if alive.replace(false) { on_admitted.call(status); }
+-                                on_admitted.call(status);
+                             }
+                             "rejected" => {
+                                 log::info!("Immediate mount poll: participant rejected");
++                                if alive.replace(false) { on_rejected.call(()); }
+-                                on_rejected.call(());
+                             }
+                             other => {
+                                 log::debug!(
+@@ -236,15 +258,20 @@
+             }
+ 
+             let meeting_id = meeting_id.clone();
++            let alive = alive.clone();
+             let poll_closure = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
++                if !alive.get() { return; }
+                 let meeting_id = meeting_id.clone();
++                let alive = alive.clone();
+                 wasm_bindgen_futures::spawn_local(async move {
++                    let result = check_status(&meeting_id).await;
++                    if !alive.get() { return; }
++                    match result {
+-                    match check_status(&meeting_id).await {
+                         Ok(status) => match status.status.as_str() {
+                             "admitted" => {
+                                 if status.room_token.is_some() {
+                                     log::info!("Polling fallback: participant admitted");
++                                    if alive.replace(false) { on_admitted.call(status); }
+-                                    on_admitted.call(status);
+                                 } else {
+                                     // Admitted but no token yet -- keep polling.
+                                     log::warn!(
+@@ -254,7 +281,7 @@
+                             }
+                             "rejected" => {
+                                 log::info!("Polling fallback: participant rejected");
++                                if alive.replace(false) { on_rejected.call(()); }
+-                                on_rejected.call(());
+                             }
+                             // "waiting" | "waiting_for_meeting" | _ => continue polling
+                             other => {

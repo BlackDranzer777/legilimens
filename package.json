@@ -4,6 +4,10 @@
   "description": "WebTransport traffic inspector and security testing tool",
   "type": "module",
   "scripts": {
+    "audit:js": "npm audit && npm --prefix client audit && npm --prefix desktop audit && npm --prefix server audit",
+    "audit:python": "python -m pip_audit --require-hashes -r python/requirements.txt && python -m pip_audit --require-hashes -r python/requirements-dev.txt",
+    "test:vite": "node scripts/tests/vite-smoke.mjs",
+    "test:launchers": "node --test desktop/tests/main.test.cjs desktop/tests/process-lifecycle.test.cjs scripts/tests/start-all.test.cjs",
     "dev": "node scripts/start-all.js",
     "vulns": "node scripts/start-vulns.js",
     "vuln-1": "node scripts/start-vulns.js 01_no_auth",
@@ -14,7 +18,13 @@
     "gen-cert": "python python/certs.py",
     "start": "python python/backend.py",
     "start-ui": "npm --prefix client run dev -- --port 5180",
-    "install-py": "pip install -r python/requirements.txt",
-    "install-ui": "npm --prefix client install"
+    "install-py": "python -m pip install --require-hashes -r python/requirements.txt",
+    "install-ui": "npm --prefix client ci",
+    "build-ui": "npm --prefix client run build",
+    "freeze": "python -m PyInstaller legilimens-backend.spec --noconfirm",
+    "desktop": "npm --prefix desktop start",
+    "desktop-portable": "npm --prefix desktop exec -- electron-builder --win --x64 --dir",
+    "desktop-installer": "npm --prefix desktop run dist",
+    "package-win": "node scripts/build-windows.mjs"
   }
 }

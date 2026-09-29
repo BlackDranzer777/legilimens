@@ -13,7 +13,7 @@ While this runs you should see:
   - your "score" rewritten if you enable a tamper rule (field=score, value=99999)
 
 Note: the proxy starts in 'paused' mode — press START in the UI, or run:
-    curl -X POST http://localhost:4436/intercept -H 'Content-Type: application/json' -d '{"action":"start"}'
+    curl -X POST http://127.0.0.1:4436/intercept -H "Authorization: Bearer <current-control-token>" -H 'Content-Type: application/json' -d '{"action":"start"}'
 
 Usage:
     python python/test_client.py                 # connect to proxy :4433 (default)

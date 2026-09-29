@@ -1,6 +1,6 @@
 """
 FastAPI control API on :4436.
-Preserves the exact HTTP contract that the React UI expects.
+API routes require a bearer token; static UI assets remain public.
 """
 
 import asyncio
@@ -12,10 +12,14 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from certs import get_cert_hash
+from paths import ui_dir
 from logger import log_info, log_error, broadcast_async
+from control_security import BIND_HOST, ControlBoundary, security
+import lifecycle
 
 # ---------- shared state (imported and mutated by proxy.py) ----------
 
@@ -36,6 +40,12 @@ active_sessions: set = set()
 # target_config is read by proxy.py to pick the upstream server
 target_config: dict = {"host": "127.0.0.1", "port": 4434, "certHash": ""}
 
+# The bundled practice target uses our own certificate, so its pin must follow
+# certificate renewal. An explicitly chosen external target is user-configured and
+# its pin is never overwritten by renewal.
+bundled_target_port: int = 4434
+target_user_configured: bool = False
+
 # proxy.py sets this once it reads the cert hash on startup
 _cert_hash_cache: str | None = None
 
@@ -53,13 +63,33 @@ manual_intercept: dict = {
 # try to serialize asyncio internals.
 pending_intercepts: dict[str, dict] = {}
 _pending_futures: dict[str, asyncio.Future] = {}
+MAX_PENDING_INTERCEPTS = 256
+MAX_PENDING_BYTES = 4 * 1024 * 1024
+MAX_INTERCEPT_PAYLOAD_BYTES = 256 * 1024
 
 
 def set_cert_hash(h: str) -> None:
-    global _cert_hash_cache, target_config
+    global _cert_hash_cache
     _cert_hash_cache = h
-    if not target_config["certHash"]:
+    # Keep the bundled target's pin current across renewal; leave an external
+    # user-configured target's pin untouched.
+    if not target_user_configured:
         target_config["certHash"] = h
+
+
+def _is_bundled_target(host: str, port: int) -> bool:
+    return host.strip() in ("127.0.0.1", "localhost") and port == bundled_target_port
+
+
+# Backend registers its coordinated-shutdown entry point so an authenticated
+# launcher can request a graceful stop (cross-platform; Windows has no graceful
+# signal for a console child).
+_shutdown_fn = None
+
+
+def register_shutdown_fn(fn) -> None:
+    global _shutdown_fn
+    _shutdown_fn = fn
 
 
 # ---------- manual intercept helpers (called by proxy.py) ----------
@@ -69,7 +99,12 @@ def _now_ms() -> int:
 
 
 def _public_intercept(item: dict) -> dict:
-    return {k: v for k, v in item.items() if k != "future"}
+    return {k: v for k, v in item.items() if k != "future" and not k.startswith("_")}
+
+
+def _pending_payload_bytes():
+    return sum(len(item["payload"].encode("utf-8")) + item.get("_decisionBytes", 0)
+               for item in pending_intercepts.values())
 
 
 def _manual_config_response() -> dict:
@@ -95,6 +130,7 @@ async def await_manual_intercept(
     payload: str,
     raw_size: int,
     stream_id: str | None = None,
+    payload_encoding: str = "utf8",
 ) -> dict:
     """Hold one message until the UI/API decides to forward/drop it.
 
@@ -102,6 +138,13 @@ async def await_manual_intercept(
     """
     if not should_manual_intercept(direction, message_type):
         return {"action": "forward", "payload": payload, "status": "bypassed", "interceptId": None}
+
+    payload_bytes = len(payload.encode("utf-8"))
+    if (len(pending_intercepts) >= MAX_PENDING_INTERCEPTS
+            or payload_bytes > MAX_INTERCEPT_PAYLOAD_BYTES
+            or _pending_payload_bytes() + payload_bytes > MAX_PENDING_BYTES):
+        await broadcast_async({"type": "resource", "message": "Intercept capacity exceeded: matching message dropped, not forwarded."})
+        return {"action": "drop", "payload": payload, "status": "capacity", "interceptId": None}
 
     intercept_id = str(uuid.uuid4())
     loop = asyncio.get_running_loop()
@@ -113,6 +156,7 @@ async def await_manual_intercept(
         "direction": direction,
         "messageType": message_type,
         "payload": payload,
+        "payloadEncoding": payload_encoding,
         "rawSize": raw_size,
         "streamId": stream_id,
     }
@@ -128,6 +172,7 @@ async def await_manual_intercept(
         "direction": direction,
         "messageType": message_type,
         "payload": payload,
+        "payloadEncoding": payload_encoding,
         "rawSize": raw_size,
         "size": raw_size,
         "latency": 0,
@@ -175,6 +220,17 @@ def _resolve_pending(intercept_id: str, action: str, payload: str | None = None)
     item = pending_intercepts.get(intercept_id)
     if fut is None or item is None or fut.done():
         return False
+    if payload is not None and len(payload.encode("utf-8")) > MAX_INTERCEPT_PAYLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="edited intercept payload exceeds size limit")
+    decision_bytes = len(payload.encode("utf-8")) if payload is not None else 0
+    if _pending_payload_bytes() + decision_bytes > MAX_PENDING_BYTES:
+        raise HTTPException(status_code=413, detail="edited payload exceeds pending intercept byte budget")
+    if action == "forward" and payload is not None and item.get("payloadEncoding") == "base64":
+        try:
+            base64.b64decode(payload, validate=True)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="binary payload must be valid base64")
+    item["_decisionBytes"] = decision_bytes
     fut.set_result({
         "action": action,
         "payload": item["payload"] if payload is None else payload,
@@ -218,24 +274,36 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=security.origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+app.add_middleware(ControlBoundary)
 
 
 # ---------- /health ----------
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "proxy": "active", "certHash": _cert_hash_cache or ""}
+    return {"status": "ok", "service": "legilimens", "instanceId": lifecycle.INSTANCE_ID,
+            "certHash": _cert_hash_cache or "",
+            "wsPort": security.ws_port, "proxyPort": security.proxy_port}
 
 
 # ---------- /cert-hash ----------
+
+@app.post("/shutdown")
+async def shutdown_endpoint():
+    """Authenticated graceful stop, used by the launcher on quit."""
+    if _shutdown_fn is None:
+        raise HTTPException(status_code=503, detail="shutdown is not available")
+    await _shutdown_fn("control API shutdown request")
+    return {"status": "stopping"}
+
 
 @app.get("/cert-hash")
 async def cert_hash():
@@ -267,8 +335,8 @@ async def post_tamper(body: TamperBody):
         "enabled": bool(body.enabled) if body.enabled is not None else tamper_rule["enabled"],
         "field": body.field.strip() if isinstance(body.field, str) else tamper_rule["field"],
         "value": str(body.value) if body.value is not None else tamper_rule["value"],
-        "matchField": body.matchField.strip() if isinstance(body.matchField, str) else "",
-        "matchValue": str(body.matchValue) if body.matchValue is not None else "",
+        "matchField": body.matchField.strip() if isinstance(body.matchField, str) else tamper_rule["matchField"],
+        "matchValue": str(body.matchValue) if body.matchValue is not None else tamper_rule["matchValue"],
     }
     log_info("Tamper rule changed", tamper_rule)
     return tamper_rule
@@ -324,30 +392,33 @@ class ManualInterceptBody(BaseModel):
 async def post_manual_intercept(body: ManualInterceptBody):
     valid_directions = {"incoming", "outgoing"}
     valid_types = {"datagram", "stream"}
+    next_config = dict(manual_intercept)
 
     if body.directions is not None:
-        directions = [d for d in body.directions if d in valid_directions]
-        if not directions:
+        directions = list(dict.fromkeys(body.directions))
+        if not directions or any(d not in valid_directions for d in directions):
             raise HTTPException(status_code=400, detail="directions must include incoming and/or outgoing")
-        manual_intercept["directions"] = directions
+        next_config["directions"] = directions
 
     if body.types is not None:
-        types = [t for t in body.types if t in valid_types]
-        if not types:
+        types = list(dict.fromkeys(body.types))
+        if not types or any(t not in valid_types for t in types):
             raise HTTPException(status_code=400, detail="types must include datagram and/or stream")
-        manual_intercept["types"] = types
+        next_config["types"] = types
 
     if body.timeoutMs is not None:
         if not (1000 <= body.timeoutMs <= 300000):
             raise HTTPException(status_code=400, detail="timeoutMs must be between 1000 and 300000")
-        manual_intercept["timeoutMs"] = int(body.timeoutMs)
+        next_config["timeoutMs"] = int(body.timeoutMs)
 
     forwarded = 0
     if body.enabled is not None:
-        manual_intercept["enabled"] = bool(body.enabled)
-        if not manual_intercept["enabled"]:
-            # Avoid leaving protocol coroutines frozen if the user disables intercept.
-            forwarded = _forward_all_pending()
+        next_config["enabled"] = bool(body.enabled)
+
+    # Commit only after every field passes validation; no await splits this update.
+    manual_intercept.update(next_config)
+    if body.enabled is False:
+        forwarded = _forward_all_pending()
 
     log_info("Manual intercept changed", {**manual_intercept, "autoForwarded": forwarded})
     return {**_manual_config_response(), "autoForwarded": forwarded}
@@ -404,28 +475,50 @@ async def post_target(body: TargetBody):
     if body.certHash and body.certHash.strip():
         h = body.certHash.strip()
         try:
-            raw = base64.b64decode(h)
+            raw = base64.b64decode(h, validate=True)
         except Exception:
             raise HTTPException(status_code=400, detail="cert hash is not valid base64")
         if len(raw) != 32:
             raise HTTPException(status_code=400, detail="cert hash must be a base64 SHA-256 (32 bytes)")
         cert_hash_val = h
 
+    global target_user_configured
+    if _is_bundled_target(body.host, body.port) and not cert_hash_val:
+        # Returning to the bundled practice target: re-enable automatic pinning so
+        # its pin follows certificate renewal.
+        target_user_configured = False
+        cert_hash_val = _cert_hash_cache or ""
+    else:
+        target_user_configured = True
+
     target_config = {"host": body.host.strip(), "port": body.port, "certHash": cert_hash_val}
-    log_info("Upstream target changed", {"host": target_config["host"], "port": target_config["port"], "pinned": bool(cert_hash_val)})
+    log_info("Upstream target changed", {"host": target_config["host"], "port": target_config["port"],
+                                         "pinned": bool(cert_hash_val), "userConfigured": target_user_configured})
     return target_config
 
 
 # ---------- /replay (Repeater: resend an edited message) ----------
 
+@app.get("/sessions")
+async def get_sessions():
+    return {"items": sorted(
+        ({"id": s.session_uuid, "target": s.target_label} for s in active_sessions if s.ready_for_replay),
+        key=lambda item: item["id"],
+    )}
+
 class ReplayBody(BaseModel):
     payload: str
     direction: str
     messageType: str
+    sessionId: str
 
 
 @app.post("/replay")
 async def post_replay(body: ReplayBody):
+    if len(body.payload.encode("utf-8")) > 1024:
+        raise HTTPException(status_code=413, detail="Replay datagram exceeds the 1024-byte safety limit")
+    if not body.sessionId.strip():
+        raise HTTPException(status_code=400, detail="sessionId is required")
     if body.direction not in ("incoming", "outgoing"):
         raise HTTPException(status_code=400, detail="direction must be 'incoming' or 'outgoing'")
     if body.messageType not in ("datagram", "stream"):
@@ -433,13 +526,27 @@ async def post_replay(body: ReplayBody):
     if _replay_fn is None:
         raise HTTPException(status_code=503, detail="proxy not ready")
 
-    result = await _replay_fn(body.direction, body.messageType, body.payload)
+    result = await _replay_fn(body.direction, body.messageType, body.payload, body.sessionId)
     if not result.get("ok"):
         raise HTTPException(status_code=409, detail=result.get("error", "replay failed"))
     return result
 
 
 # ---------- /attack (lifecycle of the attacks/ modules) ----------
+
+@app.get("/state")
+async def get_state():
+    import attack_runner
+    from logger import cursor
+    # No await: the snapshot and cursor are read in one event-loop turn.
+    attacks = attack_runner.list_attacks()
+    running = [a for a in attacks if a["status"] not in attack_runner._TERMINAL]
+    completed = sorted((a for a in attacks if a["status"] in attack_runner._TERMINAL),
+                       key=lambda a: a["completedAt"] or 0, reverse=True)[:20]
+    return {**cursor(), "captureMode": capture_mode, "manualIntercept": dict(manual_intercept),
+            "tamperEnabled": tamper_rule["enabled"],
+            "pendingIntercepts": [{**_public_intercept(item), "interceptId": item["id"]} for item in pending_intercepts.values()],
+            "attacks": [{**a, "attackType": a["type"]} for a in running + completed]}
 
 class AttackBody(BaseModel):
     type: str
@@ -456,7 +563,12 @@ async def post_attack(body: AttackBody):
             status_code=400,
             detail=f"unknown attack type '{body.type}'. Valid: {sorted(attack_runner.ATTACK_TYPES)}",
         )
-    attack_id = attack_runner.start_attack(body.type, body.target, body.params or {})
+    try:
+        attack_id = attack_runner.start_attack(body.type, body.target, body.params or {})
+    except attack_runner.AttackCapacityError as error:
+        raise HTTPException(status_code=429, detail=str(error))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     return {"attackId": attack_id, "status": "started", "type": body.type}
 
 
@@ -472,14 +584,37 @@ async def get_attack(attack_id: str):
 @app.post("/attack/{attack_id}/stop")
 async def stop_attack(attack_id: str):
     import attack_runner
-    ok = await attack_runner.stop_attack_task(attack_id)
+    try:
+        ok = await attack_runner.stop_attack_task(attack_id)
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Cancellation cleanup is still pending; run remains tracked")
     if not ok:
         raise HTTPException(status_code=404, detail="unknown attackId")
-    return {"status": "stopped"}
+    return attack_runner.get_attack_status(attack_id)
+
+
+# ---------- static UI ----------
+# Serve the built React app at "/" so the packaged Electron shell can load the
+# inspector from http://localhost:<api-port> (a secure context, which WebTransport
+# requires). Mounted LAST so every API route above still takes precedence. In dev,
+# client/dist may not exist — the Vite dev server serves the UI instead, so skip.
+_ui = ui_dir()
+if (_ui / "index.html").exists():
+    app.mount("/", StaticFiles(directory=str(_ui), html=True), name="ui")
+    log_info("Serving bundled UI", {"dir": str(_ui)})
+
+
+def make_api_server(port: int = 4436) -> "uvicorn.Server":
+    """Build the uvicorn Server without starting it, so the caller can supervise
+    its lifecycle (Server.started for readiness, Server.should_exit for shutdown)."""
+    # lifespan="off": the app's lifespan is a no-op, and skipping the ASGI lifespan
+    # task avoids a benign CancelledError traceback from uvicorn during shutdown.
+    config = uvicorn.Config(app, host=BIND_HOST, port=port, log_level="warning", proxy_headers=False,
+                            lifespan="off", limit_concurrency=64, backlog=128, timeout_keep_alive=5)
+    return uvicorn.Server(config)
 
 
 async def start_api(port: int = 4436):
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
-    server = uvicorn.Server(config)
+    server = make_api_server(port)
     log_info("HTTP API server started", {"port": port})
     await server.serve()
