@@ -135,8 +135,10 @@ button { font: inherit; color: inherit; }
 .nav__toggle[aria-expanded="true"] > span:nth-of-type(3) { transform: translateY(-3.75px) rotate(-45deg); }
 
 @media (max-width: 760px) {
-  .nav__toggle { display: flex; }
-  .nav__end { order: 3; }
+  .nav__inner { gap: 14px; }
+  /* Brand on the left; Download, GitHub and the menu button grouped on the right. */
+  .nav__end { order: 3; margin-left: auto; }
+  .nav__toggle { display: flex; order: 4; margin-left: 0; margin-right: -8px; }
   .nav__links {
     position: absolute; top: 72px; left: var(--gutter); right: var(--gutter);
     flex-direction: column; gap: 0; margin: 0;
@@ -393,12 +395,14 @@ button { font: inherit; color: inherit; }
   .icons { margin: 0; flex-shrink: 0; }
 }
 @media (max-width: 520px) {
+  .hero__lede { text-align: left; margin-left: 0; }
   .hero__lede br { display: none; }
   .app__body { grid-template-columns: 34px 1fr; height: 268px; }
   .app__status { display: none; }
-  .log td:nth-child(1) { display: none; }
-  .log td:nth-child(3) { width: 20%; }
-  .log td:nth-child(5) { width: 27%; }
+  /* Phone: keep direction, payload and flag so badges like TAMPERED fit untruncated. */
+  .log td:nth-child(1), .log td:nth-child(3) { display: none; }
+  .log td:nth-child(2) { width: 22px; }
+  .log td:nth-child(5) { width: 78px; }
   .rep { grid-template-columns: 1fr; }
   .band__right { flex-direction: column; align-items: flex-start; }
 }
@@ -409,7 +413,7 @@ button { font: inherit; color: inherit; }
   grid-template-columns: 1fr 1fr;
   column-gap: clamp(32px, 6vw, 88px);
   row-gap: clamp(28px, 4vw, 48px);
-  padding-top: clamp(80px, 11vw, 150px);
+  padding-top: clamp(64px, 11vw, 150px);
 }
 .why__title, .toolkit__title {
   font-size: clamp(64px, 10.5vw, 140px);
@@ -451,7 +455,7 @@ button { font: inherit; color: inherit; }
   display: grid;
   grid-template-columns: 1fr 1fr;
   column-gap: clamp(32px, 6vw, 88px);
-  padding-top: clamp(80px, 10vw, 140px);
+  padding-top: clamp(64px, 10vw, 140px);
 }
 .toolkit__aside { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
 .toolkit__aside .dot { margin: clamp(24px, 3vw, 36px) 0 18px; }
@@ -493,7 +497,7 @@ button { font: inherit; color: inherit; }
 }
 
 /* ───────────── Download ───────────── */
-.download { padding-top: clamp(96px, 12vw, 170px); }
+.download { padding-top: clamp(72px, 12vw, 170px); }
 .download__head {
   display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; flex-wrap: wrap;
   margin-bottom: clamp(28px, 4vw, 48px);
